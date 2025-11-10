@@ -4,19 +4,18 @@ name: Trigger auto deployment for dev-noshowtrainingapi
 on:
   # Automatically trigger it when detected changes in repo
   push:
-    branches: 
-      [ main ]
+    branches: [main]
     paths:
-    - '**'
-    - '.github/workflows/dev-noshowtrainingapi-AutoDeployTrigger-5220f0a0-7a97-45fe-bf84-e07148b2cb07.yml'
+      - "**"
+      - ".github/workflows/dev-noshowtrainingapi-AutoDeployTrigger-5220f0a0-7a97-45fe-bf84-e07148b2cb07.yml"
 
-  # Allow manual trigger 
-  workflow_dispatch:      
+  # Allow manual trigger
+  workflow_dispatch:
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-    permissions: 
+    permissions:
       id-token: write #This is required for requesting the OIDC JWT Token
       contents: read #Required when GH token is used to authenticate with private repo
 
@@ -31,19 +30,25 @@ jobs:
           tenant-id: ${{ secrets.DEVNOSHOWTRAININGAPI_AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.DEVNOSHOWTRAININGAPI_AZURE_SUBSCRIPTION_ID }}
 
-      - name: Build and push container image to registry
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+
+      - name: Build and push container to Docker Hub
+        uses: docker/build-push-action@v6
+        with:
+          push: true
+          tags: guigarciag/no-show-training-api:${{ github.sha }}
+          file: ./Dockerfile
+
+      - name: Deploy to Azure Container Apps
         uses: azure/container-apps-deploy-action@v2
         with:
-          appSourcePath: ${{ github.workspace }}
-          _dockerfilePathKey_: _dockerfilePath_
-          _targetLabelKey_: _targetLabel_
-          registryUrl: 
-          registryUsername: ${{ secrets.DEVNOSHOWTRAININGAPI_REGISTRY_USERNAME }}
-          registryPassword: ${{ secrets.DEVNOSHOWTRAININGAPI_REGISTRY_PASSWORD }}
+          registryUrl: docker.io
+          registryUsername: ${{ secrets.DOCKERHUB_USERNAME }}
+          registryPassword: ${{ secrets.DOCKERHUB_PASSWORD }}
           containerAppName: dev-noshowtrainingapi
           resourceGroup: resources
-          imageToBuild: default/[parameters('containerAppName')]:${{ github.sha }}
-          _buildArgumentsKey_: |
-            _buildArgumentsValues_
-
-
+          imageToDeploy: guigarciag/no-show-training-api:${{ github.sha }}
