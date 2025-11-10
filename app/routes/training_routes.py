@@ -107,7 +107,6 @@ async def upload_and_train(
             blob_url = blob_service.upload_file(
                 model_file_path,
                 blob_name="rf_grid_model.pkl",
-                blob_path=config.AZURE_BLOB_MODEL_PATH,
                 overwrite=True
             )
             
