@@ -1,0 +1,19 @@
+# FastAPI and server
+fastapi
+uvicorn
+python-multipart
+pydantic
+python-dotenv
+numpy
+pandas
+scikit-learn
+imbalanced-learn
+category-encoders
+azure-storage-blob
+azure-core
+openpyxl
+pyarrow
+pytest
+pytest-asyncio
+httpx
+python-json-logger
