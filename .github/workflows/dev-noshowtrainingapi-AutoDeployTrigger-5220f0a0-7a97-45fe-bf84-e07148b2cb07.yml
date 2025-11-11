@@ -40,7 +40,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           push: true
-          tags: guigarciag/no-show-training-api:${{ github.sha }}
+          tags: pauloht3/no-show-training-api:${{ github.sha }}
           file: ./Dockerfile
 
       - name: Deploy to Azure Container Apps
@@ -51,4 +51,5 @@ jobs:
           registryPassword: ${{ secrets.DOCKERHUB_PASSWORD }}
           containerAppName: dev-noshowtrainingapi
           resourceGroup: resources
-          imageToDeploy: guigarciag/no-show-training-api:${{ github.sha }}
+          imageToDeploy: pauloht3/no-show-training-api:${{ github.sha }}
+
