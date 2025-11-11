@@ -53,3 +53,5 @@ jobs:
           resourceGroup: resources
           imageToDeploy: pauloht3/no-show-training-api:${{ github.sha }}
 
+# TEST DEPLOY
+
