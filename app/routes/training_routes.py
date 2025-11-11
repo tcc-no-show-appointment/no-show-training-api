@@ -99,23 +99,30 @@ async def upload_and_train(
         logger.info(f"Model saved to {model_file_path}")
         
         # Step 7: Upload to Azure Blob Storage
-        blob_url = None
+        logger.info("Uploading model to Azure Blob Storage as rf_grid_model.pkl")
         blob_service = BlobStorageService()
         
-        if blob_service.is_configured():
-            logger.info("Uploading model to Azure Blob Storage as rf_grid_model.pkl")
-            blob_url = blob_service.upload_file(
-                model_file_path,
-                blob_name="rf_grid_model.pkl",
-                overwrite=True
+        if not blob_service.is_configured():
+            logger.error("Azure Blob Storage not configured")
+            raise HTTPException(
+                status_code=500,
+                detail="Azure Blob Storage is not configured. Please check your environment variables."
             )
-            
-            if blob_url:
-                logger.info(f"Model uploaded to blob: {blob_url}")
-            else:
-                logger.warning("Failed to upload model to Azure Blob Storage")
-        else:
-            logger.warning("Azure Blob Storage not configured, skipping upload")
+        
+        blob_url = blob_service.upload_file(
+            model_file_path,
+            blob_name="rf_grid_model.pkl",
+            overwrite=True
+        )
+        
+        if not blob_url:
+            logger.error("Failed to upload model to Azure Blob Storage")
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to upload model to Azure Blob Storage"
+            )
+        
+        logger.info(f"Model uploaded to blob: {blob_url}")
         
         # Prepare response
         response = TrainingResponse(
