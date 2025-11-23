@@ -5,7 +5,6 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Build arguments
-ARG GH_TOKEN
 ARG ENVIRONMENT=development
 
 # Set environment variables
