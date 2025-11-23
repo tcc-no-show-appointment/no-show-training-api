@@ -1,24 +1,15 @@
 name: CI/CD Pipeline for No-Show Training API
 
-# When this action will be executed
 on:
-  # Automatically trigger CI on push to these branches
   push:
     branches: 
       - develop
       - homolog
       - prod
-    paths:
-      - '**'
-      - '.github/workflows/ci-cd.yml'
-
-  # Trigger CI (not deploy) on Pull Requests to homolog or prod
   pull_request:
     branches:
       - homolog
       - prod
-
-  # Allow manual trigger 
   workflow_dispatch:
 
 jobs:
@@ -133,8 +124,8 @@ jobs:
     if: github.event_name == 'push' && (github.ref == 'refs/heads/homolog' || github.ref == 'refs/heads/prod')
     environment: ${{ github.ref == 'refs/heads/homolog' && 'homolog' || 'prod' }}
     permissions: 
-      id-token: write #This is required for requesting the OIDC JWT Token
-      contents: read #Required when GH token is used to authenticate with private repo
+      id-token: write
+      contents: read
 
     steps:
       - name: Checkout to the branch
