@@ -9,9 +9,6 @@ logger = setup_logger(__name__)
 class ModelTrainer:
     """Service for model training using noshow_lib."""
     
-    def __init__(self):
-        pass
-    
     def train(
         self, 
         features: pd.DataFrame
