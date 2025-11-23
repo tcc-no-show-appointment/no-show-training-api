@@ -1,24 +1,15 @@
 name: CI/CD Pipeline for No-Show Training API
 
-# When this action will be executed
 on:
-  # Automatically trigger CI on push to these branches
   push:
     branches: 
       - develop
       - homolog
       - prod
-    paths:
-      - '**'
-      - '.github/workflows/ci-cd.yml'
-
-  # Trigger CI (not deploy) on Pull Requests to homolog or prod
   pull_request:
     branches:
       - homolog
       - prod
-
-  # Allow manual trigger 
   workflow_dispatch:
 
 jobs:
@@ -36,8 +27,9 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
 
-      - name: Replace <GH_TOKEN> in requirements.txt
-        run: sed -i 's|<GH_TOKEN>|${{ secrets.GH_TOKEN }}|g' requirements.txt
+      - name: Configure Git credentials
+        run: |
+          git config --global url."https://${{ secrets.GH_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
       - name: Install dependencies
         run: |
@@ -59,10 +51,13 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
 
+      - name: Configure Git credentials
+        run: |
+          git config --global url."https://${{ secrets.GH_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          sed -i 's|<GH_TOKEN>|${{ secrets.GH_TOKEN }}|g' requirements.txt
           pip install -r requirements.txt
           pip install flake8
 
@@ -86,9 +81,9 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
 
-
-      - name: Replace <GH_TOKEN> in requirements.txt
-        run: sed -i 's|<GH_TOKEN>|${{ secrets.GH_TOKEN }}|g' requirements.txt
+      - name: Configure Git credentials
+        run: |
+          git config --global url."https://${{ secrets.GH_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
       - name: Install dependencies
         run: |
@@ -129,8 +124,8 @@ jobs:
     if: github.event_name == 'push' && (github.ref == 'refs/heads/homolog' || github.ref == 'refs/heads/prod')
     environment: ${{ github.ref == 'refs/heads/homolog' && 'homolog' || 'prod' }}
     permissions: 
-      id-token: write #This is required for requesting the OIDC JWT Token
-      contents: read #Required when GH token is used to authenticate with private repo
+      id-token: write
+      contents: read
 
     steps:
       - name: Checkout to the branch

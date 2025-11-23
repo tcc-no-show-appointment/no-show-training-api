@@ -14,13 +14,14 @@ ENV ENVIRONMENT=${ENVIRONMENT}
 # Copy requirements first for better caching
 COPY requirements.txt .
 
-# Replace token placeholder with build arg
-RUN sed -i "s|<GH_TOKEN>|${GH_TOKEN}|g" requirements.txt
-
-# Install git, install dependencies, then remove git to keep image small
-RUN apt-get update && \
+# Install git, configure credentials, install dependencies, then cleanup
+RUN --mount=type=secret,id=gh_token \
+    apt-get update && \
     apt-get install -y git && \
+    GH_TOKEN=$(cat /run/secrets/gh_token 2>/dev/null || echo "${GH_TOKEN}") && \
+    git config --global url."https://${GH_TOKEN}@github.com/".insteadOf "https://github.com/" && \
     pip install --no-cache-dir -r requirements.txt && \
+    git config --global --unset url."https://${GH_TOKEN}@github.com/".insteadOf && \
     apt-get purge -y git && \
     apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/*
