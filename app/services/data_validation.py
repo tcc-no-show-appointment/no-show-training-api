@@ -26,30 +26,26 @@ class DataValidator:
             "warnings": []
         }
         
-        # Check if file exists
         if not Path(file_path).exists():
             validation_result["errors"].append("File does not exist")
             logger.error(f"Validation failed: File does not exist - {file_path}")
             return validation_result
         
-        # Get file size
+        file_format = detect_file_format(file_path)
+        if file_format is None:
+            validation_result["errors"].append(
+                f"Unsupported file format. Supported formats: {list(self.supported_formats.keys())}"
+            )
+            logger.error(f"Validation failed: Unsupported file extension - {file_path}")
+            return validation_result
+        
+        validation_result["file_format"] = file_format
+        
         try:
             validation_result["file_size_mb"] = get_file_size_mb(file_path)
         except Exception as e:
             validation_result["warnings"].append(f"Could not determine file size: {str(e)}")
         
-        # Detect file format
-        file_format = detect_file_format(file_path)
-        validation_result["file_format"] = file_format
-        
-        if file_format is None:
-            validation_result["errors"].append(
-                f"Unsupported file format. Supported formats: {list(self.supported_formats.keys())}"
-            )
-            logger.error(f"Validation failed: Unsupported file format - {file_path}")
-            return validation_result
-        
-        # Try to load the file
         try:
             df = self._load_file(file_path, file_format)
             logger.info(f"Successfully loaded file. Shape: {df.shape}")
@@ -58,21 +54,17 @@ class DataValidator:
             logger.error(f"Validation failed: Could not load file - {str(e)}")
             return validation_result
         
-        # Check dataframe
         validation_result["rows"] = len(df)
         validation_result["columns"] = len(df.columns)
         
-        # Validate schema
         schema_validation = self._validate_schema(df)
         validation_result["missing_columns"] = schema_validation["missing_columns"]
         validation_result["errors"].extend(schema_validation["errors"])
         validation_result["warnings"].extend(schema_validation["warnings"])
         
-        # Additional data quality checks
         quality_checks = self._check_data_quality(df)
         validation_result["warnings"].extend(quality_checks["warnings"])
         
-        # Determine if valid
         validation_result["is_valid"] = len(validation_result["errors"]) == 0
         
         if validation_result["is_valid"]:
@@ -100,7 +92,6 @@ class DataValidator:
             "warnings": []
         }
         
-        # Check for missing required columns
         missing = [col for col in self.required_columns if col not in df.columns]
         
         if missing:
@@ -110,7 +101,6 @@ class DataValidator:
             )
             logger.error(f"Schema validation failed: Missing columns {missing}")
         
-        # Check for extra columns (warning only)
         extra = [col for col in df.columns if col not in self.required_columns]
         if extra:
             result["warnings"].append(
@@ -124,12 +114,10 @@ class DataValidator:
             "warnings": []
         }
         
-        # Check for empty dataframe
         if len(df) == 0:
             result["warnings"].append("Dataframe is empty")
             return result
         
-        # Check for missing values in critical columns
         critical_columns = ["No-show", "Age", "Gender"]
         for col in critical_columns:
             if col in df.columns:
@@ -140,7 +128,6 @@ class DataValidator:
                         f"Column '{col}' has {missing_count} missing values ({missing_pct:.2f}%)"
                     )
         
-        # Check target variable distribution (if present)
         if "No-show" in df.columns:
             try:
                 value_counts = df["No-show"].value_counts()

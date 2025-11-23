@@ -48,46 +48,34 @@ class BlobStorageService:
     def is_configured(self) -> bool:
         return self.blob_service_client is not None
     
-    def upload_file(
+    def upload_bytes(
         self,
-        file_path: str,
-        blob_name: Optional[str] = None,
+        data: bytes,
+        blob_name: str,
         blob_path: Optional[str] = None,
         overwrite: bool = True
     ) -> Optional[str]:
         if not self.is_configured():
-            logger.error("Blob Storage is not configured. Cannot upload file.")
+            logger.error("Blob Storage is not configured. Cannot upload bytes.")
             return None
         
         try:
-            # Determine blob name
-            if blob_name is None:
-                blob_name = Path(file_path).name
-            
-            # Add path prefix if provided
             if blob_path:
                 blob_name = f"{blob_path.rstrip('/')}/{blob_name}"
             
-            # Get blob client
             blob_client = self.blob_service_client.get_blob_client(
                 container=self.container_name,
                 blob=blob_name
             )
             
-            logger.info(f"Uploading {file_path} to blob {blob_name}")
+            logger.info(f"Uploading bytes to blob {blob_name}")
             
-            # Upload file
-            with open(file_path, "rb") as data:
-                blob_client.upload_blob(data, overwrite=overwrite)
+            blob_client.upload_blob(data, overwrite=overwrite)
             
             blob_url = blob_client.url
-            logger.info(f"File successfully uploaded to {blob_url}")
+            logger.info(f"Bytes successfully uploaded to {blob_url}")
             
             return blob_url
-        
-        except FileNotFoundError:
-            logger.error(f"File not found: {file_path}")
-            return None
         
         except AzureError as e:
             logger.error(f"Azure error during upload: {str(e)}")

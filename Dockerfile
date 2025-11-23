@@ -4,6 +4,12 @@ FROM python:3.11-slim
 # Set work directory
 WORKDIR /app
 
+# Build arguments
+ARG ENVIRONMENT=development
+
+# Set environment variables
+ENV ENVIRONMENT=${ENVIRONMENT}
+
 # Copy requirements first for better caching
 COPY requirements.txt .
 
