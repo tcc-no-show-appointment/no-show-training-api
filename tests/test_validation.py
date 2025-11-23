@@ -35,7 +35,7 @@ def test_load_and_validate():
         validator = DataValidator()
         result, loaded_df = validator.load_and_validate(temp_path)
         
-        assert result['is_valid'] == True
+        assert result['is_valid']
         assert loaded_df is not None
         assert len(loaded_df) == 1
     finally:

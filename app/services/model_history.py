@@ -8,9 +8,6 @@ logger = setup_logger(__name__)
 class ModelHistorySaver:
     """Service for saving model training history."""
     
-    def __init__(self):
-        pass
-    
     def save_history(
         self,
         model_name: str,
