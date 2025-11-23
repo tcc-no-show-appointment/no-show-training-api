@@ -18,7 +18,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY app/ ./app/
-COPY main_old_backup.py .
 
 # Create necessary directories
 RUN mkdir -p temp_uploads logs
