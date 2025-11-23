@@ -5,7 +5,6 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Build arguments
-ARG GH_TOKEN
 ARG ENVIRONMENT=development
 
 # Set environment variables
@@ -14,13 +13,14 @@ ENV ENVIRONMENT=${ENVIRONMENT}
 # Copy requirements first for better caching
 COPY requirements.txt .
 
-# Replace token placeholder with build arg
-RUN sed -i "s|<GH_TOKEN>|${GH_TOKEN}|g" requirements.txt
-
-# Install git, install dependencies, then remove git to keep image small
-RUN apt-get update && \
+# Install git, install dependencies using secret, then remove git to keep image small
+RUN --mount=type=secret,id=gh_token \
+    apt-get update && \
     apt-get install -y git && \
-    pip install --no-cache-dir -r requirements.txt && \
+    GH_TOKEN=$(cat /run/secrets/gh_token) && \
+    sed "s|<GH_TOKEN>|${GH_TOKEN}|g" requirements.txt > requirements_temp.txt && \
+    pip install --no-cache-dir -r requirements_temp.txt && \
+    rm requirements_temp.txt && \
     apt-get purge -y git && \
     apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/*
