@@ -16,12 +16,8 @@ class Config:
     API_VERSION: str = "1.0.0"
     API_DESCRIPTION: str = "API for training no-show appointment prediction models"
     
-    MODEL_RANDOM_STATE: int = int(os.getenv("MODEL_RANDOM_STATE", "42"))
-    TEST_SIZE: float = float(os.getenv("TEST_SIZE", "0.20"))
-    CV_SPLITS: int = int(os.getenv("CV_SPLITS", "3"))
+    ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development")
     
-    MAX_FILE_SIZE_MB: int = int(os.getenv("MAX_FILE_SIZE_MB", "100"))
-    ALLOWED_EXTENSIONS: set = {".csv", ".xlsx", ".xls", ".parquet"}
     UPLOAD_TEMP_DIR: str = os.getenv("UPLOAD_TEMP_DIR", "temp_uploads")
     
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
