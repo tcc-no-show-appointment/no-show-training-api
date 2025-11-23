@@ -153,7 +153,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           push: true
-          tags: ${{ secrets.CONTAINER_IMAGE_NAME_TRAINING }}:${{ github.sha }}
+          tags: ${{ secrets.CONTAINER_IMAGE_NAME }}:${{ github.sha }}
           file: ./Dockerfile
           build-args: |
             GH_TOKEN=${{ secrets.GH_TOKEN }}
@@ -165,7 +165,7 @@ jobs:
           registryUrl: docker.io
           registryUsername: ${{ secrets.DOCKERHUB_USERNAME }}
           registryPassword: ${{ secrets.DOCKERHUB_PASSWORD }}
-          containerAppName: ${{ secrets.CONTAINER_APP_NAME_TRAINING }}
+          containerAppName: ${{ secrets.CONTAINER_APP_NAME }}
           resourceGroup: resources
-          imageToDeploy: ${{ secrets.CONTAINER_IMAGE_NAME_TRAINING }}:${{ github.sha }}
+          imageToDeploy: ${{ secrets.CONTAINER_IMAGE_NAME }}:${{ github.sha }}
 
