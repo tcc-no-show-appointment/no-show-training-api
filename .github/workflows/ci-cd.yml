@@ -139,9 +139,9 @@ jobs:
       - name: Azure Login
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.NOSHOWTRAININGAPI_AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.NOSHOWTRAININGAPI_AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.NOSHOWTRAININGAPI_AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ secrets.NOSHOWAPPOINTMENT_AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.NOSHOWAPPOINTMENT_AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.NOSHOWAPPOINTMENT_AZURE_SUBSCRIPTION_ID }}
 
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
