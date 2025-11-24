@@ -4,23 +4,18 @@ uvicorn
 python-multipart
 pydantic
 python-dotenv
-
-# Data handling
 pandas
 openpyxl
 pyarrow
 numpy
 joblib
-scikit-learn
-
-# Azure Storage
 azure-storage-blob
 azure-core
-
-# Testing
 pytest
 pytest-asyncio
 httpx
-
-# NoShow Library
+scikit-learn==1.7.2
+lightgbm==4.5.0
+xgboost==2.1.1
+category-encoders==2.6.3
 git+https://github.com/tcc-no-show-appointment/noshow_lib.git@main
