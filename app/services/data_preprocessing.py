@@ -15,7 +15,7 @@ def process_raw_data(df: pd.DataFrame) -> pd.DataFrame:
     if 'No-show' not in df.columns:
         df['No-show'] = 'No'
     
-    processed_data = load_and_process_data(df)
+    processed_data = load_and_process_data(df, is_external_access=True)
     logger.info(f"Processed data shape: {processed_data.shape}")
     
     return processed_data
