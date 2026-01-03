@@ -127,10 +127,6 @@ cd no-show-training-api
 
 # Install dependencies (including noshow_lib)
 pip install -r requirements.txt
-
-# Set up environment variables
-cp .env.example .env
-# Edit .env with your Azure credentials
 ```
 
 ## Dependencies
