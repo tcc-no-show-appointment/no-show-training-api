@@ -15,7 +15,7 @@ COPY requirements.txt .
 
 # Install git and dependencies, then cleanup
 RUN apt-get update && \
-    apt-get install -y git && \
+    apt-get install -y git libgomp1 && \
     pip install --no-cache-dir -r requirements.txt && \
     apt-get purge -y git && \
     apt-get autoremove -y && \
