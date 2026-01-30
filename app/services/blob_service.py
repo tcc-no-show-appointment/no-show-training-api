@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Optional
+from datetime import datetime
 from azure.storage.blob import BlobServiceClient, BlobClient
 from azure.core.exceptions import AzureError
 
@@ -48,39 +49,60 @@ class BlobStorageService:
     def is_configured(self) -> bool:
         return self.blob_service_client is not None
     
-    def upload_bytes(
+    def upload_model_with_versioning(
         self,
         data: bytes,
-        blob_name: str,
-        blob_path: Optional[str] = None,
-        overwrite: bool = True
-    ) -> Optional[str]:
+        environment: str = "homolog",
+        base_name: str = "model"
+    ) -> Optional[dict]:
         if not self.is_configured():
-            logger.error("Blob Storage is not configured. Cannot upload bytes.")
+            logger.error("Blob Storage is not configured. Cannot upload model.")
+            return None
+        
+        if environment not in ["development","homolog", "prod"]:
+            logger.error(f"Invalid environment: {environment}. Must be 'development', 'homolog' or 'prod'.")
             return None
         
         try:
-            if blob_path:
-                blob_name = f"{blob_path.rstrip('/')}/{blob_name}"
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            versioned_name = f"{environment}/{base_name}_{timestamp}.joblib"
+            latest_name = f"{environment}/{base_name}_latest.joblib"
             
-            blob_client = self.blob_service_client.get_blob_client(
+            versioned_blob_client = self.blob_service_client.get_blob_client(
                 container=self.container_name,
-                blob=blob_name
+                blob=versioned_name
             )
             
-            logger.info(f"Uploading bytes to blob {blob_name}")
+            logger.info(f"Uploading versioned model to: {versioned_name}")
+            versioned_blob_client.upload_blob(data, overwrite=False)
             
-            blob_client.upload_blob(data, overwrite=overwrite)
+            latest_blob_client = self.blob_service_client.get_blob_client(
+                container=self.container_name,
+                blob=latest_name
+            )
             
-            blob_url = blob_client.url
-            logger.info(f"Bytes successfully uploaded to {blob_url}")
+            logger.info(f"Uploading latest copy to: {latest_name}")
+            latest_blob_client.upload_blob(
+                data, 
+                overwrite=True,
+                metadata={"original_version": timestamp}
+            )
             
-            return blob_url
+            logger.info(f"Model successfully uploaded. Versioned: {versioned_name}, Latest: {latest_name}")
+            
+            return {
+                "versioned_url": versioned_blob_client.url,
+                "latest_url": latest_blob_client.url,
+                "versioned_name": versioned_name,
+                "latest_name": latest_name,
+                "timestamp": timestamp,
+                "environment": environment
+            }
         
         except AzureError as e:
-            logger.error(f"Azure error during upload: {str(e)}")
+            logger.error(f"Azure error during model upload: {str(e)}")
             return None
         
         except Exception as e:
-            logger.error(f"Unexpected error during upload: {str(e)}")
+            logger.error(f"Unexpected error during model upload: {str(e)}")
             return None

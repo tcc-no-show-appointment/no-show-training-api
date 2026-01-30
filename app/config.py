@@ -10,7 +10,6 @@ class Config:
     AZURE_STORAGE_ACCOUNT_KEY: Optional[str] = os.getenv("AZURE_STORAGE_ACCOUNT_KEY")
     
     AZURE_BLOB_CONTAINER_NAME: str = os.getenv("AZURE_BLOB_CONTAINER_NAME", "devconteiner")
-    AZURE_BLOB_MODEL_PATH: str = os.getenv("AZURE_BLOB_MODEL_PATH", "trained-models")
     
     API_TITLE: str = "No-Show Training API"
     API_VERSION: str = "1.0.0"

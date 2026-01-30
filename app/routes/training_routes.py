@@ -122,31 +122,34 @@ async def upload_and_train(
         
         logger.info(f"Training completed. Model size: {len(model_bytes)} bytes, Metrics: {list(metrics.keys())}")
         
-        logger.info("Uploading trained model to Azure Blob Storage")
-        from app.utils.helpers import generate_model_filename
-        
-        model_filename = generate_model_filename(
-            base_name="noshow_model",
-            environment=config.ENVIRONMENT
-        )
+        logger.info("Uploading trained model to Azure Blob Storage with versioning")
         
         blob_service = BlobStorageService()
         
         if not blob_service.is_configured():
             logger.warning("Azure Blob Storage not configured - skipping model upload")
             model_url = None
+            model_filename = None
+            timestamp = None
         else:
-            model_url = blob_service.upload_bytes(
+            result = blob_service.upload_model_with_versioning(
                 data=model_bytes,
-                blob_name=model_filename,
-                blob_path="models",
-                overwrite=True
+                environment=config.ENVIRONMENT,
+                base_name="model"
             )
             
-            if model_url:
-                logger.info(f"Model uploaded successfully to: {model_url}")
+            if result:
+                model_url = result["latest_url"]
+                model_filename = result["latest_name"]
+                timestamp = result["timestamp"]
+                logger.info(f"Model uploaded successfully")
+                logger.info(f"  Versioned: {result['versioned_name']}")
+                logger.info(f"  Latest: {result['latest_name']}")
             else:
-                logger.warning("Model upload returned no URL")
+                logger.warning("Model upload failed")
+                model_url = None
+                model_filename = None
+                timestamp = None
         
         logger.info("Saving model history")
 
