@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 
 from app.config import config
-from app.routes import training_router
+from app.routes import training_router, health_router
 from app.models.schemas import HealthResponse
 from app.utils.logger import setup_logger
 
@@ -14,6 +14,7 @@ app = FastAPI(
 )
 
 app.include_router(training_router)
+app.include_router(health_router)
 
 @app.get("/", response_model=HealthResponse)
 async def root():
