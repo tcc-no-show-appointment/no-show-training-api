@@ -35,3 +35,10 @@ class HealthResponse(BaseModel):
     status: str = Field(..., description="Health status")
     version: str = Field(..., description="API version")
     timestamp: datetime = Field(default_factory=datetime.now, description="Health check timestamp")
+
+
+class ModelResponse(BaseModel):
+    id: int = Field(..., description="Unique identifier of the model")
+    model_name: str = Field(..., description="Name of the model")
+    created_at: datetime = Field(..., description="Creation date of the model")
+    accuracy: Optional[float] = Field(None, description="Model accuracy")
