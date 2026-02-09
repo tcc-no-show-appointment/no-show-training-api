@@ -1,18 +1,18 @@
 REQUIRED_COLUMNS = [
-    "PatientId",
-    "AppointmentID",
-    "Gender",
-    "ScheduledDay",
-    "AppointmentDay",
-    "Age",
-    "Neighbourhood",
-    "Scholarship",
-    "Hipertension",
-    "Diabetes",
-    "Alcoholism",
-    "Handcap",
-    "SMS_received",
-    "No-show"
+    "id",
+    "Status",
+    "Marcacao",
+    "DataHoraConsulta",
+    "Idade",
+    "Sexo",
+    "CidadePaciente",
+    "BairroPaciente",
+    "TipoConvenio",
+    "idUnicoPaciente",
+    "UnidadeAtendimento",
+    "EnderecoUnidadeAtendimento",
+    "CEPUnidadeAtendimento",
+    "Especialidade"
 ]
 
 SUPPORTED_FORMATS = {

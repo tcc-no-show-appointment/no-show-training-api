@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
+import yaml
 from azure.storage.blob import BlobServiceClient, BlobClient
 from azure.core.exceptions import AzureError
 
@@ -106,3 +107,82 @@ class BlobStorageService:
         except Exception as e:
             logger.error(f"Unexpected error during model upload: {str(e)}")
             return None
+    
+    def download_config_file(
+        self,
+        folder: str = "model_configuration",
+        filename: str = "prod.yaml"
+    ) -> Optional[str]:
+        """
+        Download configuration file from blob storage.
+        
+        Args:
+            folder: Folder name in blob storage (default: 'model_configuration')
+            filename: Name of the config file (default: 'prod.yaml')
+        
+        Returns:
+            Configuration file content as string, or None if download fails
+        """
+        blob_path = f"{folder}/{filename}"
+        
+        try:
+            logger.info(f"Downloading config file from: {blob_path}")
+            
+            if self.blob_service_client:
+                blob_client = self.blob_service_client.get_blob_client(
+                    container=self.container_name,
+                    blob=blob_path
+                )
+                
+                download_stream = blob_client.download_blob()
+                config_bytes = download_stream.readall()
+                config_content = config_bytes.decode('utf-8')
+                logger.info(f"Successfully downloaded config file ({len(config_bytes)} bytes)")
+                return config_content
+            else:
+                logger.error("Blob service client not initialized")
+                return None
+        
+        except AzureError as e:
+            logger.error(f"Azure error downloading config file: {str(e)}")
+            return None
+        
+        except Exception as e:
+            logger.error(f"Error downloading config file from {blob_path}: {str(e)}")
+            return None
+    
+    def get_config_from_blob(
+        self,
+        folder: str = "model_configuration",
+        filename: str = "prod.yaml"
+    ) -> dict:
+        """
+        Download and parse config.yaml from blob storage.
+        
+        Args:
+            folder: Folder name in blob storage (default: 'model_configuration')
+            filename: Name of the config file (default: 'prod.yaml')
+        
+        Returns:
+            dict: Parsed configuration dictionary
+            
+        Raises:
+            Exception: If blob storage is not configured or download fails
+        """
+        logger.info(f"Downloading config from blob storage: {folder}/{filename}")
+        
+        if not self.is_configured():
+            error_msg = "Azure Blob Storage not configured. Cannot download config."
+            logger.error(error_msg)
+            raise Exception(error_msg)
+        
+        config_content = self.download_config_file(folder=folder, filename=filename)
+        
+        if not config_content:
+            error_msg = f"Failed to download config file from {folder}/{filename}"
+            logger.error(error_msg)
+            raise Exception(error_msg)
+        
+        config_dict = yaml.safe_load(config_content)
+        logger.info(f"Configuration loaded successfully with keys: {list(config_dict.keys())}")
+        return config_dict

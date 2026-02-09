@@ -1,4 +1,6 @@
 import pandas as pd
+import joblib
+from io import BytesIO
 from typing import Dict, Any
 from app.utils.logger import setup_logger
 from noshow_lib import train_model
@@ -11,21 +13,36 @@ class ModelTrainer:
     
     def train(
         self, 
-        features: pd.DataFrame
+        features: pd.DataFrame,
+        config: Dict[str, Any]
     ) -> Dict[str, Any]:
         logger.info("Starting model training with noshow_lib")
         
         try:
-            model_bytes, metrics = train_model(
-                df_input=features,
-                is_external_access=True
+            # train_model returns a dict with artifacts (model object, metrics, paths)
+            training_artifacts = train_model(
+                df=features,
+                config=config
             )
+            
+            # Extract model object and serialize to bytes
+            model = training_artifacts.get("model")
+            metrics = training_artifacts.get("metrics", {})
+            
+            if model is None:
+                raise ValueError("Training completed but no model object was returned")
+            
+            # Serialize model to bytes
+            buffer = BytesIO()
+            joblib.dump(model, buffer)
+            model_bytes = buffer.getvalue()
             
             logger.info(f"Model training completed successfully. Model size: {len(model_bytes)} bytes")
             
             return {
                 "model_bytes": model_bytes,
-                "metrics": metrics
+                "metrics": metrics,
+                "artifacts": training_artifacts  # Include full artifacts for additional info
             }
             
         except Exception as e:
