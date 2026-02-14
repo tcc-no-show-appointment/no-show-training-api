@@ -5,13 +5,20 @@ from typing import Dict, Any, List, Optional
 from app.constants import REQUIRED_COLUMNS, SUPPORTED_FORMATS
 from app.utils.logger import setup_logger
 from app.utils.helpers import detect_file_format, get_file_size_mb
+from noshow_lib.data_handler import load_and_validate as lib_validate
 
 logger = setup_logger(__name__)
 
 
 class DataValidator:
-    def __init__(self):
-        self.required_columns = REQUIRED_COLUMNS
+    def __init__(self, required_columns: Optional[List[str]] = None):
+        """Initialize DataValidator.
+        
+        Args:
+            required_columns: Optional list of required column names from config.
+                            If None, uses default from constants.
+        """
+        self.required_columns = required_columns if required_columns is not None else REQUIRED_COLUMNS
         self.supported_formats = SUPPORTED_FORMATS
     
     def validate_file(self, file_path: str) -> Dict[str, Any]:
@@ -57,10 +64,14 @@ class DataValidator:
         validation_result["rows"] = len(df)
         validation_result["columns"] = len(df.columns)
         
-        schema_validation = self._validate_schema(df)
-        validation_result["missing_columns"] = schema_validation["missing_columns"]
-        validation_result["errors"].extend(schema_validation["errors"])
-        validation_result["warnings"].extend(schema_validation["warnings"])
+        # Only validate schema if required columns are defined
+        if self.required_columns:
+            schema_validation = self._validate_schema(df)
+            validation_result["missing_columns"] = schema_validation["missing_columns"]
+            validation_result["errors"].extend(schema_validation["errors"])
+            validation_result["warnings"].extend(schema_validation["warnings"])
+        else:
+            logger.info("Skipping schema validation - no required columns specified")
         
         quality_checks = self._check_data_quality(df)
         validation_result["warnings"].extend(quality_checks["warnings"])
@@ -161,3 +172,30 @@ class DataValidator:
                 return validation_result, None
         
         return validation_result, None
+    
+    def validate_with_config(self, df: pd.DataFrame, config_dict: dict) -> pd.DataFrame:
+        """
+        Validate dataframe against config schema using noshow_lib.
+        
+        Args:
+            df: DataFrame to validate
+            config_dict: Configuration dictionary from config.yaml
+            
+        Returns:
+            pd.DataFrame: Validated dataframe
+            
+        Raises:
+            ValueError: If validation fails
+            Exception: For other validation errors
+        """
+        logger.info("Performing schema validation with noshow_lib")
+        try:
+            validated_df = lib_validate(df, config_dict)
+            logger.info("✓ Schema validation passed with noshow_lib")
+            return validated_df
+        except ValueError as e:
+            logger.error(f"Schema validation failed: {str(e)}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error during config validation: {str(e)}")
+            raise

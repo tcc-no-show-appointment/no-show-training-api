@@ -28,12 +28,6 @@ def generate_unique_filename(original_filename: str) -> str:
     return f"{base_name}_{timestamp}_{unique_id}{ext}"
 
 
-def generate_model_filename(base_name: str = "rf_grid_model", environment: Optional[str] = None) -> str:
-    if environment:
-        return f"{base_name}_{environment}.joblib"
-    return f"{base_name}.joblib"
-
-
 def ensure_directory_exists(directory: str) -> Path:
     dir_path = Path(directory)
     dir_path.mkdir(parents=True, exist_ok=True)

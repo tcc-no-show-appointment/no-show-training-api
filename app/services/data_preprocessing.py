@@ -1,31 +1,27 @@
 import pandas as pd
 from typing import Dict, Any
 from app.utils.logger import setup_logger
-from noshow_lib import load_and_process_data, build_features
+from noshow_lib.feature_engineering import build_features
 
 logger = setup_logger(__name__)
 
 
-def process_raw_data(df: pd.DataFrame) -> pd.DataFrame:
-    """Process raw data using noshow_lib."""
-    logger.info("Processing raw data using noshow_lib")
+def engineer_features(processed_data: pd.DataFrame, config: Dict[str, Any]) -> pd.DataFrame:
+    """
+    Engineer features using noshow_lib's build_features.
+    This replaces the old process of load_and_process_data + build_features separately.
     
-    if 'AppointmentID' not in df.columns:
-        df['AppointmentID'] = range(len(df))
-    if 'No-show' not in df.columns:
-        df['No-show'] = 'No'
+    Args:
+        processed_data: Raw input dataframe
+        config: Configuration dictionary from config.yaml
+        
+    Returns:
+        DataFrame with engineered features ready for training
+    """
+    logger.info("Engineering features using noshow_lib.build_features")
     
-    processed_data = load_and_process_data(df, is_external_access=True)
-    logger.info(f"Processed data shape: {processed_data.shape}")
-    
-    return processed_data
-
-
-def engineer_features(processed_data: pd.DataFrame) -> pd.DataFrame:
-    """Engineer features using noshow_lib."""
-    logger.info("Engineering features using noshow_lib")
-    
-    features = build_features(processed_data, {"target_column": "No-show"})
+    features = build_features(processed_data, config)
     logger.info(f"Feature engineering complete. Shape: {features.shape}")
     
     return features
+

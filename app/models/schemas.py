@@ -35,3 +35,23 @@ class HealthResponse(BaseModel):
     status: str = Field(..., description="Health status")
     version: str = Field(..., description="API version")
     timestamp: datetime = Field(default_factory=datetime.now, description="Health check timestamp")
+
+
+class ModelResponse(BaseModel):
+    id: int = Field(..., description="Unique identifier of the model")
+    model_name: str = Field(..., description="Name of the model")
+    model_version: Optional[str] = Field(None, description="Model version identifier")
+    blob_url: Optional[str] = Field(None, description="URL to model in blob storage")
+    environment: Optional[str] = Field(None, description="Environment (development/homolog/prod)")
+    accuracy: Optional[float] = Field(None, description="Model accuracy")
+    precision: Optional[float] = Field(None, description="Model precision")
+    recall: Optional[float] = Field(None, description="Model recall")
+    f1_score: Optional[float] = Field(None, description="Model F1 score")
+    roc_auc: Optional[float] = Field(None, description="Model ROC AUC score")
+    training_time_seconds: Optional[float] = Field(None, description="Training duration")
+    dataset_rows: Optional[int] = Field(None, description="Number of training rows")
+    dataset_columns: Optional[int] = Field(None, description="Number of features")
+    created_at: datetime = Field(..., description="Creation date of the model")
+    
+    class Config:
+        from_attributes = True
