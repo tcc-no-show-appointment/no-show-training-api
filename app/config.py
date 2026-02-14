@@ -23,6 +23,8 @@ class Config:
     LOG_FILE: str = os.getenv("LOG_FILE", "app.log")
 
     # Database Configuration
+    # Use connection string if provided, otherwise use individual components
+    DB_CONNECTION_STRING: Optional[str] = os.getenv("DB_CONNECTION_STRING")
     DB_SERVER: str = os.getenv("DB_SERVER", "")
     DB_NAME: str = os.getenv("DB_NAME", "")
     DB_USER: str = os.getenv("DB_USER", "")
