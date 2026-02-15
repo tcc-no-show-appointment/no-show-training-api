@@ -30,6 +30,9 @@ class Config:
     DB_USER: str = os.getenv("DB_USER", "")
     DB_PASSWORD: str = os.getenv("DB_PASSWORD", "")
     DB_DRIVER: str = os.getenv("DB_DRIVER", "{ODBC Driver 17 for SQL Server}")
-    DB_TABLE_MODELS_HISTORY: str = os.getenv("DB_TABLE_MODELS_HISTORY", "tb_models_history")
+    DB_SCHEMA: str = os.getenv("DB_SCHEMA", "dbo")
+    DB_TABLE_MODELS_HISTORY: str = os.getenv("DB_TABLE_MODELS_HISTORY", "models_history")
+    DB_TABLE_RAW_APPOINTMENTS: str = os.getenv("DB_TABLE_RAW_APPOINTMENTS", "raw_appointments")
+    DB_TABLE_TRAINING_DATA: str = os.getenv("DB_TABLE_TRAINING_DATA", "appointment_training_data")
 
 config = Config()
