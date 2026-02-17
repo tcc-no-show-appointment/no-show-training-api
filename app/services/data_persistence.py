@@ -353,7 +353,8 @@ class DataPersistenceService:
                 placeholders = ", ".join(["?"] * len(chunk.columns))
                 values_clause = ", ".join([f"({placeholders})" for _ in range(len(chunk))])
                 
-                sql = (
+                # Safe: schema/table/columns are internally controlled, VALUES are parameterized
+                sql = (  # nosec B608
                     f"INSERT INTO {self._schema}.{table_name} ({col_names}) "
                     f"OUTPUT INSERTED.{id_column} "
                     f"VALUES {values_clause}"
