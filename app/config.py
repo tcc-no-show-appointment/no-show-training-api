@@ -30,6 +30,15 @@ class Config:
     DB_USER: str = os.getenv("DB_USER", "")
     DB_PASSWORD: str = os.getenv("DB_PASSWORD", "")
     DB_DRIVER: str = os.getenv("DB_DRIVER", "{ODBC Driver 17 for SQL Server}")
-    DB_TABLE_MODELS_HISTORY: str = os.getenv("DB_TABLE_MODELS_HISTORY", "tb_models_history")
+    DB_SCHEMA: str = os.getenv("DB_SCHEMA", "dbo")
+    DB_TABLE_MODELS_HISTORY: str = os.getenv("DB_TABLE_MODELS_HISTORY", "models_history")
+    DB_TABLE_RAW_APPOINTMENTS: str = os.getenv("DB_TABLE_RAW_APPOINTMENTS", "raw_appointments")
+    DB_TABLE_TRAINING_DATA: str = os.getenv("DB_TABLE_TRAINING_DATA", "appointment_training_data")
+    
+    # Training Configuration
+    # Limit rows loaded for training (None = load all). Use this for very large datasets (900k+)
+    TRAINING_DATA_LIMIT: Optional[int] = int(os.getenv("TRAINING_DATA_LIMIT")) if os.getenv("TRAINING_DATA_LIMIT") else None
+    # Limit training data to recent N days (None = all history)
+    TRAINING_DAYS_LOOKBACK: Optional[int] = int(os.getenv("TRAINING_DAYS_LOOKBACK")) if os.getenv("TRAINING_DAYS_LOOKBACK") else None
 
 config = Config()

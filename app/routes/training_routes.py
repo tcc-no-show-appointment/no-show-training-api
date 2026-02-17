@@ -10,6 +10,7 @@ from app.models.schemas import TrainingResponse, ValidationResponse
 from app.services import (
     DataValidator,
     engineer_features,
+    DataPersistenceService,
     ModelTrainer,
     ModelHistorySaver,
     BlobStorageService
@@ -171,21 +172,131 @@ async def upload_and_train(
                 detail=f"Config validation error: {str(e)}"
             )
         
-        # Step 4: Feature engineering
-        logger.info("Engineering features using noshow_lib.build_features")
+        # Step 4: Save raw data to database and capture IDs
+        logger.info("Persisting raw data to raw_appointments table")
+        persistence = DataPersistenceService(db)
+        try:
+            captured_ids = persistence.save_raw_appointments(df)
+            logger.info(f"Captured {len(captured_ids)} raw_appointment_id values")
+            
+            # Add the captured IDs to the DataFrame before feature engineering
+            df["raw_appointment_id"] = captured_ids
+            logger.info(f"Added raw_appointment_id column to DataFrame")
+            
+            # Commit the session to ensure raw data is persisted
+            db.commit()
+            logger.info("Raw data transaction committed")
+        except Exception as e:
+            logger.error(f"Failed to persist raw appointments: {e}", exc_info=True)
+            db.rollback()
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to save raw data to database: {str(e)}"
+            )
+
+        # Step 5: Feature engineering (will preserve raw_appointment_id column)
+        logger.info(f"Before build_features - DataFrame shape: {df.shape}, columns: {list(df.columns)}")
+        logger.info(f"Raw appointment IDs present: {df['raw_appointment_id'].head().tolist()}")
+        
         features = engineer_features(df, config_dict)
         
-        # Step 5: Train model
-        logger.info("Training model with noshow_lib")
+        logger.info(f"After build_features - DataFrame shape: {features.shape}, columns: {list(features.columns)}")
+        if "raw_appointment_id" in features.columns:
+            logger.info(f"[SUCCESS] raw_appointment_id preserved! Sample: {features['raw_appointment_id'].head().tolist()}")
+        else:
+            logger.warning("[WARNING] raw_appointment_id was NOT preserved by build_features")
+
+        # Step 6: Save training data to database with ID linkage
+        logger.info("Persisting training data to appointment_training_data table")
+        try:
+            persistence.save_training_data(features, source="raw")
+            db.commit()
+            logger.info("Training data transaction committed")
+        except Exception as e:
+            logger.error(f"Failed to persist training data: {e}", exc_info=True)
+            db.rollback()
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to save training data to database: {str(e)}"
+            )
+
+        # Step 7: Load ALL training data (historical + new) for model training
+        logger.info("Loading all training data from database for model training")
+        try:
+            # Use config to control data loading for large datasets
+            all_training_data = persistence.load_all_training_data(
+                limit=config.TRAINING_DATA_LIMIT,  # None = all data, or set limit (e.g., 500000)
+                days_lookback=config.TRAINING_DAYS_LOOKBACK  # None = all history, or days (e.g., 730)
+            )
+            logger.info(f"Loaded {len(all_training_data)} total rows for training (historical + new)")
+            
+            if config.TRAINING_DATA_LIMIT:
+                logger.info(f"Training data limited to {config.TRAINING_DATA_LIMIT} most recent rows")
+            if config.TRAINING_DAYS_LOOKBACK:
+                logger.info(f"Training data limited to last {config.TRAINING_DAYS_LOOKBACK} days")
+        except Exception as e:
+            logger.error(f"Failed to load training data: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to load training data from database: {str(e)}"
+            )
+
+        # Step 8: Validate combined dataset size for training
+        MIN_SAMPLES_TOTAL = 20
+        MIN_SAMPLES_PER_CLASS = 2
+        target_col = config_dict.get("data", {}).get("target_column", "no_show")
+        
+        if target_col not in all_training_data.columns:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Target column '{target_col}' not found in training data"
+            )
+        
+        class_counts = all_training_data[target_col].value_counts()
+        total_samples = len(all_training_data)
+        min_class_count = class_counts.min() if len(class_counts) > 0 else 0
+        
+        logger.info(f"Combined dataset validation - Total samples: {total_samples}, Class distribution: {class_counts.to_dict()}")
+        
+        if total_samples < MIN_SAMPLES_TOTAL:
+            logger.warning(f"Dataset too small for training: {total_samples} samples (minimum: {MIN_SAMPLES_TOTAL})")
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "message": "Combined dataset too small for model training",
+                    "total_samples": total_samples,
+                    "minimum_required": MIN_SAMPLES_TOTAL,
+                    "class_distribution": class_counts.to_dict(),
+                    "hint": "Need more training data in database"
+                }
+            )
+        
+        if min_class_count < MIN_SAMPLES_PER_CLASS:
+            logger.warning(f"Imbalanced dataset: smallest class has only {min_class_count} sample(s)")
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "message": "Combined dataset too imbalanced for stratified training",
+                    "class_distribution": class_counts.to_dict(),
+                    "minimum_per_class": MIN_SAMPLES_PER_CLASS,
+                    "hint": "Need more balanced training data"
+                }
+            )
+
+        # Step 9: Train model with ALL data (historical + new)
+        new_data_count = len(features)
+        total_data_count = len(all_training_data)
+        historical_data_count = total_data_count - new_data_count
+
         trainer = ModelTrainer()
-        training_result = trainer.train(features=features, config=config_dict)
+        training_result = trainer.train(features=all_training_data, config=config_dict)
         
         model_bytes = training_result["model_bytes"]
         metrics = training_result["metrics"]
         
         logger.info(f"Training completed. Model size: {len(model_bytes)} bytes, Metrics: {list(metrics.keys())}")
         
-        # Step 5: Upload model to blob storage
+        # Step 10: Upload model to blob storage
         logger.info("Uploading trained model to Azure Blob Storage with versioning")
         
         if not blob_service.is_configured():
@@ -212,7 +323,7 @@ async def upload_and_train(
                 model_url = None
                 model_filename = None
                 timestamp = None
-        # Step 6: Save model history to database
+        # Step 11: Save model history to database
         logger.info("Saving model history to database")
         try:
             history_saver = ModelHistorySaver()
@@ -233,8 +344,10 @@ async def upload_and_train(
             logger.info(f"Model history saved with ID: {model_record.id}")
         except Exception as e:
             logger.error(f"Failed to save model history: {str(e)}", exc_info=True)
-            # Don't fail the entire request if history save fails
-            logger.warning("Continuing despite model history save failure")        # TODO: Save on Database the models history
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to save model history: {str(e)}"
+            )
 
         
         response = TrainingResponse(

@@ -191,7 +191,7 @@ class DataValidator:
         logger.info("Performing schema validation with noshow_lib")
         try:
             validated_df = lib_validate(df, config_dict)
-            logger.info("✓ Schema validation passed with noshow_lib")
+            logger.info("Schema validation passed with noshow_lib")
             return validated_df
         except ValueError as e:
             logger.error(f"Schema validation failed: {str(e)}")
