@@ -220,33 +220,54 @@ async def upload_and_train(
                 detail=f"Failed to save training data to database: {str(e)}"
             )
 
-        # Step 7: Validate dataset size for training
+        # Step 7: Load ALL training data (historical + new) for model training
+        logger.info("Loading all training data from database for model training")
+        try:
+            # Use config to control data loading for large datasets
+            all_training_data = persistence.load_all_training_data(
+                limit=config.TRAINING_DATA_LIMIT,  # None = all data, or set limit (e.g., 500000)
+                days_lookback=config.TRAINING_DAYS_LOOKBACK  # None = all history, or days (e.g., 730)
+            )
+            logger.info(f"Loaded {len(all_training_data)} total rows for training (historical + new)")
+            
+            if config.TRAINING_DATA_LIMIT:
+                logger.info(f"Training data limited to {config.TRAINING_DATA_LIMIT} most recent rows")
+            if config.TRAINING_DAYS_LOOKBACK:
+                logger.info(f"Training data limited to last {config.TRAINING_DAYS_LOOKBACK} days")
+        except Exception as e:
+            logger.error(f"Failed to load training data: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to load training data from database: {str(e)}"
+            )
+
+        # Step 8: Validate combined dataset size for training
         MIN_SAMPLES_TOTAL = 20
         MIN_SAMPLES_PER_CLASS = 2
         target_col = config_dict.get("data", {}).get("target_column", "no_show")
         
-        if target_col not in features.columns:
+        if target_col not in all_training_data.columns:
             raise HTTPException(
                 status_code=400,
-                detail=f"Target column '{target_col}' not found in features after engineering"
+                detail=f"Target column '{target_col}' not found in training data"
             )
         
-        class_counts = features[target_col].value_counts()
-        total_samples = len(features)
+        class_counts = all_training_data[target_col].value_counts()
+        total_samples = len(all_training_data)
         min_class_count = class_counts.min() if len(class_counts) > 0 else 0
         
-        logger.info(f"Dataset validation - Total samples: {total_samples}, Class distribution: {class_counts.to_dict()}")
+        logger.info(f"Combined dataset validation - Total samples: {total_samples}, Class distribution: {class_counts.to_dict()}")
         
         if total_samples < MIN_SAMPLES_TOTAL:
             logger.warning(f"Dataset too small for training: {total_samples} samples (minimum: {MIN_SAMPLES_TOTAL})")
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "message": "Dataset too small for model training",
+                    "message": "Combined dataset too small for model training",
                     "total_samples": total_samples,
                     "minimum_required": MIN_SAMPLES_TOTAL,
                     "class_distribution": class_counts.to_dict(),
-                    "hint": "Upload a larger dataset with at least 20 rows containing both 'realizado' and 'falta' appointments"
+                    "hint": "Need more training data in database"
                 }
             )
         
@@ -255,25 +276,28 @@ async def upload_and_train(
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "message": "Dataset too imbalanced for stratified training",
+                    "message": "Combined dataset too imbalanced for stratified training",
                     "class_distribution": class_counts.to_dict(),
                     "minimum_per_class": MIN_SAMPLES_PER_CLASS,
-                    "hint": "Ensure each class (realizado/falta) has at least 2 samples"
+                    "hint": "Need more balanced training data"
                 }
             )
 
-        # Step 8: Train model
-        logger.info("Training model with noshow_lib")
+        # Step 9: Train model with ALL data (historical + new)
+        new_data_count = len(features)
+        total_data_count = len(all_training_data)
+        historical_data_count = total_data_count - new_data_count
+
         trainer = ModelTrainer()
-        training_result = trainer.train(features=features, config=config_dict)
+        training_result = trainer.train(features=all_training_data, config=config_dict)
         
         model_bytes = training_result["model_bytes"]
         metrics = training_result["metrics"]
         
         logger.info(f"Training completed. Model size: {len(model_bytes)} bytes, Metrics: {list(metrics.keys())}")
         
-        # Step 9: Upload model to blob storage
-        logger.info("Uploading t rained model to Azure Blob Storage with versioning")
+        # Step 10: Upload model to blob storage
+        logger.info("Uploading trained model to Azure Blob Storage with versioning")
         
         if not blob_service.is_configured():
             logger.warning("Azure Blob Storage not configured - skipping model upload")
@@ -299,7 +323,7 @@ async def upload_and_train(
                 model_url = None
                 model_filename = None
                 timestamp = None
-        # Step 10: Save model history to database
+        # Step 11: Save model history to database
         logger.info("Saving model history to database")
         try:
             history_saver = ModelHistorySaver()

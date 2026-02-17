@@ -11,6 +11,7 @@ additional SELECT queries, maintaining traceability via row indexes.
 
 import pandas as pd
 from typing import List, Optional, Dict
+from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 
 from app.config import config
@@ -122,6 +123,9 @@ class DataPersistenceService:
         try:
             db_df = self._map_columns(raw_df, RAW_CSV_TO_DB_MAP)
             
+            # Add created_at timestamp (required NOT NULL column in database)
+            db_df["created_at"] = datetime.now()
+            
             captured_ids = self._bulk_insert_with_output(
                 db_df, table_name, "raw_appointment_id"
             )
@@ -176,6 +180,9 @@ class DataPersistenceService:
                 db_df["raw_appointment_id"] = None
                 logger.warning("raw_appointment_id column not found in features - FK will be NULL")
             
+            # Add created_at timestamp (required NOT NULL column in database)
+            db_df["created_at"] = datetime.now()
+            
             self._bulk_insert(db_df, table_name)
             logger.info(f"Successfully saved {len(db_df)} rows to {full_table}")
             
@@ -187,6 +194,86 @@ class DataPersistenceService:
             raise
 
         return features_df
+
+    def load_all_training_data(
+        self,
+        limit: Optional[int] = None,
+        days_lookback: Optional[int] = None
+    ) -> pd.DataFrame:
+        """
+        Load all training data from appointment_training_data table for model training.
+
+        Args:
+            limit: Optional maximum number of rows to fetch (most recent first).
+                   Use this to limit memory usage for very large tables.
+            days_lookback: Optional number of days to look back from today.
+                          E.g., 730 for last 2 years of data.
+
+        Returns:
+            DataFrame with all training features, columns mapped back to
+            feature names expected by the model (not DB column names).
+
+        Note:
+            For large datasets (900k+ rows), this uses chunked reading to
+            avoid memory overflow. Data is sorted by appointment_at DESC
+            to get most recent data first if using limit.
+        """
+        table_name = config.DB_TABLE_TRAINING_DATA
+        full_table = f"{self._schema}.{table_name}"
+
+        logger.info(f"Loading training data from {full_table}")
+        
+        # Build query with proper SQL Server syntax
+        select_clause = "SELECT"
+        if limit:
+            select_clause += f" TOP {limit}"
+            logger.info(f"Limiting to {limit} most recent rows")
+        
+        query = f"{select_clause} * FROM {full_table}"
+        
+        # Add date filter if specified
+        if days_lookback:
+            cutoff_date = datetime.now() - timedelta(days=days_lookback)
+            query += f" WHERE appointment_at >= '{cutoff_date.strftime('%Y-%m-%d')}'"
+            logger.info(f"Filtering data from last {days_lookback} days (since {cutoff_date.date()})")
+        
+        # Add ordering (most recent first)
+        query += " ORDER BY appointment_at DESC"
+        
+        try:
+            # Use pandas read_sql with chunking for memory efficiency
+            engine = self.db.get_bind()
+            
+            # For very large datasets, read in chunks and concatenate
+            if limit is None or limit > 100000:
+                logger.info("Large dataset detected - using chunked reading")
+                chunks = []
+                chunksize = 50000  # Read 50k rows at a time
+                
+                for chunk in pd.read_sql(query, engine, chunksize=chunksize):
+                    chunks.append(chunk)
+                    logger.debug(f"Loaded chunk: {len(chunk)} rows")
+                
+                df = pd.concat(chunks, ignore_index=True)
+            else:
+                df = pd.read_sql(query, engine)
+            
+            logger.info(f"Loaded {len(df)} rows from {full_table}")
+            
+            # Map DB columns back to feature names (reverse mapping)
+            reverse_map = {v: k for k, v in FEATURES_TO_TRAINING_MAP.items()}
+            
+            # Only rename columns that exist in the DataFrame
+            columns_to_rename = {db_col: feat_col for db_col, feat_col in reverse_map.items() if db_col in df.columns}
+            df = df.rename(columns=columns_to_rename)
+            
+            logger.info(f"Mapped {len(columns_to_rename)} columns back to feature names")
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"Failed to load training data from {full_table}: {e}", exc_info=True)
+            raise
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -322,7 +409,6 @@ class DataPersistenceService:
         )
 
         engine = self.db.get_bind()
-
         df.to_sql(
             name=table_name,
             con=engine,
