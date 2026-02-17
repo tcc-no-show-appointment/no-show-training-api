@@ -354,8 +354,8 @@ class DataPersistenceService:
                 values_clause = ", ".join([f"({placeholders})" for _ in range(len(chunk))])
                 
                 # Safe: schema/table/columns are internally controlled, VALUES are parameterized
-                sql = (  # nosec B608
-                    f"INSERT INTO {self._schema}.{table_name} ({col_names}) "
+                sql = (
+                    f"INSERT INTO {self._schema}.{table_name} ({col_names}) "  # nosec B608
                     f"OUTPUT INSERTED.{id_column} "
                     f"VALUES {values_clause}"
                 )
