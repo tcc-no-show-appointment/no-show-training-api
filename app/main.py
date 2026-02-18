@@ -12,7 +12,8 @@ Base.metadata.create_all(bind=engine)
 app = FastAPI(
     title=config.API_TITLE,
     version=config.API_VERSION,
-    description=config.API_DESCRIPTION
+    description=config.API_DESCRIPTION,
+    redirect_slashes=False
 )
 
 app.include_router(training_router)
