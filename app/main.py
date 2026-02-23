@@ -21,6 +21,7 @@ app.include_router(health_router)
 app.include_router(model_history_router)
 
 @app.get("/", response_model=HealthResponse)
+@app.get("", response_model=HealthResponse, include_in_schema=False)
 async def root():
     return HealthResponse(
         status="healthy",
