@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from app.config import config
 from app.routes import training_router, health_router, model_history_router
 from app.models.schemas import HealthResponse
@@ -14,6 +15,15 @@ app = FastAPI(
     version=config.API_VERSION,
     description=config.API_DESCRIPTION,
     redirect_slashes=False
+)
+
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"], 
 )
 
 app.include_router(training_router)
