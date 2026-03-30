@@ -58,6 +58,7 @@ FEATURES_TO_TRAINING_MAP = {
     "unit_address": "unit_address",
     "unit_cep": "unit_zipcode",
     "specialty": "specialty",
+    "specialty_group": "specialty_group",
     # Target
     "no_show": "no_show",
     # Engineered features
@@ -71,18 +72,52 @@ FEATURES_TO_TRAINING_MAP = {
     "time_of_day": "time_of_day",
     "is_weekend": "is_weekend",
     "is_holiday": "is_holiday",
+    "is_month_start": "is_month_start",
+    "is_month_end": "is_month_end",
+    "is_pre_holiday": "is_pre_holiday",
+    "is_post_holiday": "is_post_holiday",
+    "is_bridge_day": "is_bridge_day",
+    "is_holiday_window": "is_holiday_window",
     "month_sin": "month_sin",
     "month_cos": "month_cos",
     "weekday_sin": "weekday_sin",
     "weekday_cos": "weekday_cos",
     "hour_sin": "hour_sin",
     "hour_cos": "hour_cos",
+    # Patient history features
+    "has_patient_history": "has_patient_history",
     "previous_appointments_count": "previous_appointments_count",
-    "days_since_last_visit": "days_since_last_visit",
-    "appointments_in_same_schedule": "appointments_in_same_schedule",
+    "patient_tenure_days": "patient_tenure_days",
+    "past_no_shows": "past_no_shows",
+    "previous_no_show": "previous_no_show",
+    "consecutive_no_shows_2": "consecutive_no_shows_2",
+    "past_cancellations_count": "past_cancellations_count",
+    "cancellation_rate": "cancellation_rate",
     "no_show_rate_patient": "no_show_rate_patient",
-    "specialty_no_show_rate": "specialty_no_show_rate",
+    "no_show_rate_patient_smoothed": "no_show_rate_patient_smoothed",
+    "no_show_rate_recent_3": "no_show_rate_recent_3",
+    "no_show_rate_recent_5": "no_show_rate_recent_5",
+    "days_since_last_visit": "days_since_last_visit",
+    "days_since_last_no_show": "days_since_last_no_show",
+    "appointments_in_same_schedule_day": "appointments_in_same_schedule_day",
+    # Behavioral / interaction features
+    "is_diff_specialty": "is_diff_specialty",
+    "waiting_days_delta": "waiting_days_delta",
+    "age_x_waiting_days": "age_x_waiting_days",
+    "no_show_rate_x_waiting_days": "no_show_rate_x_waiting_days",
+    "age_x_specialty_risk": "age_x_specialty_risk",
+    "gender_age_profile": "gender_age_profile",
+    # Contextual rate features
     "unit_no_show_rate": "unit_no_show_rate",
+    "specialty_no_show_rate": "specialty_no_show_rate",
+    "specialty_group_no_show_rate": "specialty_group_no_show_rate",
+    "insurance_no_show_rate": "insurance_no_show_rate",
+    "neighborhood_risk_score": "neighborhood_risk_score",
+    "specialty_high_no_show_flag": "specialty_high_no_show_flag",
+    # Geo features
+    "same_city": "same_city",
+    "is_local_resident": "is_local_resident",
+    "same_cep_prefix5": "same_cep_prefix5",
 }
 
 
@@ -122,7 +157,13 @@ class DataPersistenceService:
 
         try:
             db_df = self._map_columns(raw_df, RAW_CSV_TO_DB_MAP)
-            
+
+            # CSV date strings can have 7-digit fractional seconds (e.g. "2019-10-15 15:14:00.0000000")
+            # which SQL Server ODBC rejects when passed as raw strings. Parse to datetime first.
+            for col in ("scheduled_at", "appointment_at"):
+                if col in db_df.columns:
+                    db_df[col] = pd.to_datetime(db_df[col], errors="coerce")
+
             # Add created_at timestamp (required NOT NULL column in database)
             db_df["created_at"] = datetime.now()
             

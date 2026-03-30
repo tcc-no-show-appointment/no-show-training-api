@@ -283,65 +283,72 @@ async def upload_and_train(
                 }
             )
 
-        # Step 9: Train model with ALL data (historical + new)
+        # Step 9: Train models (one per specialty_group) with ALL data
         new_data_count = len(features)
         total_data_count = len(all_training_data)
         historical_data_count = total_data_count - new_data_count
 
+        # Ensure specialty_group column exists (needed by train_model)
+        if "specialty_group" not in all_training_data.columns:
+            logger.info("Deriving specialty_group from specialty for loaded training data")
+            from noshow_lib.feature_engineering import _create_specialty_group
+            all_training_data = _create_specialty_group(all_training_data)
+
         trainer = ModelTrainer()
-        training_result = trainer.train(features=all_training_data, config=config_dict)
+        training_output = trainer.train(features=all_training_data, config=config_dict)
         
-        model_bytes = training_result["model_bytes"]
-        metrics = training_result["metrics"]
+        # Aggregate metrics across specialties
+        all_metrics = {
+            specialty: data["metrics"]
+            for specialty, data in training_output.items()
+        }
+        all_thresholds = {
+            specialty: data["threshold"]
+            for specialty, data in training_output.items()
+        }
+        specialties_trained = list(training_output.keys())
         
-        logger.info(f"Training completed. Model size: {len(model_bytes)} bytes, Metrics: {list(metrics.keys())}")
+        logger.info(
+            f"Training completed for {len(specialties_trained)} specialties: {specialties_trained}"
+        )
         
-        # Step 10: Upload model to blob storage
-        logger.info("Uploading trained model to Azure Blob Storage with versioning")
+        # Step 10: Upload all specialty models to blob storage
+        logger.info("Uploading trained specialty models to Azure Blob Storage")
         
+        upload_results = None
         if not blob_service.is_configured():
             logger.warning("Azure Blob Storage not configured - skipping model upload")
-            model_url = None
-            model_filename = None
-            timestamp = None
         else:
-            result = blob_service.upload_model_with_versioning(
-                data=model_bytes,
+            upload_results = blob_service.upload_specialty_models(
+                training_output=training_output,
                 environment=config.ENVIRONMENT,
-                base_name="model"
             )
             
-            if result:
-                model_url = result["latest_url"]
-                model_filename = result["latest_name"]
-                timestamp = result["timestamp"]
-                logger.info(f"Model uploaded successfully")
-                logger.info(f"  Versioned: {result['versioned_name']}")
-                logger.info(f"  Latest: {result['latest_name']}")
+            if upload_results:
+                logger.info(
+                    f"All models uploaded successfully. "
+                    f"Timestamp: {upload_results['timestamp']}"
+                )
             else:
                 logger.warning("Model upload failed")
-                model_url = None
-                model_filename = None
-                timestamp = None
-        # Step 11: Save model history to database
-        logger.info("Saving model history to database")
+
+        # Step 11: Save model history to database (one record per specialty)
+        logger.info("Saving model histories to database")
         try:
             history_saver = ModelHistorySaver()
-            model_record = history_saver.save_history(
+            history_saver.save_specialty_histories(
                 db=db,
-                model_name=model_filename or "model_unknown",
-                metrics=metrics,
-                blob_url=model_url,
-                model_version=result.get("versioned_name") if result else None,
+                training_output=training_output,
+                upload_results=upload_results,
                 environment=config.ENVIRONMENT,
                 file_metadata={
                     "filename": file.filename,
                     "rows": validation_result.get("rows"),
                     "columns": validation_result.get("columns"),
-                    "file_size_mb": validation_result.get("file_size_mb")
-                }
+                    "file_size_mb": validation_result.get("file_size_mb"),
+                },
             )
-            logger.info(f"Model history saved with ID: {model_record.id}")
+            logger.info("Model histories saved")
         except Exception as e:
             logger.error(f"Failed to save model history: {str(e)}", exc_info=True)
             raise HTTPException(
@@ -349,14 +356,26 @@ async def upload_and_train(
                 detail=f"Failed to save model history: {str(e)}"
             )
 
-        
+        # Build blob_urls summary for response
+        blob_urls = None
+        if upload_results and upload_results.get("specialties"):
+            blob_urls = {
+                specialty: sp_info.get("versioned_url")
+                for specialty, sp_info in upload_results["specialties"].items()
+            }
+
         response = TrainingResponse(
             status="success",
-            message="Training flow completed successfully",
-            model_filename=model_filename,
-            blob_url=model_url,
-            metrics=metrics,
-            training_time_seconds=metrics.get("training_time_seconds", 0)
+            message=f"Training completed for {len(specialties_trained)} specialty groups",
+            specialties_trained=specialties_trained,
+            blob_urls=blob_urls,
+            metrics=all_metrics,
+            thresholds=all_thresholds,
+            training_time_seconds=sum(
+                m.get("training_time_seconds", 0)
+                for m in all_metrics.values()
+                if isinstance(m, dict)
+            ),
         )
         
         logger.info("Training flow completed successfully")

@@ -13,6 +13,7 @@ class ModelRegistry(Base):
     model_version = Column(String(100), nullable=True)
     blob_url = Column(Text, nullable=True)
     environment = Column(String(50), nullable=True)
+    specialty_group = Column(String(100), nullable=True)
     
     # Training metrics
     accuracy = Column(Float, nullable=True)
@@ -20,6 +21,8 @@ class ModelRegistry(Base):
     recall = Column(Float, nullable=True)
     f1_score = Column(Float, nullable=True)
     roc_auc = Column(Float, nullable=True)
+    pr_auc = Column(Float, nullable=True)
+    threshold = Column(Float, nullable=True)
     
     # Additional metrics stored as JSON
     metrics_json = Column(JSON, nullable=True)
@@ -84,6 +87,7 @@ class AppointmentTrainingData(Base):
     unit_address = Column(String(255), nullable=True)
     unit_zipcode = Column(String(20), nullable=True)
     specialty = Column(String(150), nullable=True)
+    specialty_group = Column(String(100), nullable=True)
 
     # Target
     no_show = Column(SmallInteger, nullable=False)
