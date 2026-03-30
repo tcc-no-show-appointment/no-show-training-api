@@ -69,6 +69,8 @@ temp_uploads/
 
 # Model files (local development)
 models/*.pkl
+models/*.joblib
+models/*.json
 *.pkl
 
 # OS
@@ -219,6 +221,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+local.env
 
 # Spyder project settings
 .spyderproject
