@@ -32,8 +32,10 @@ class Config:
     DB_DRIVER: str = os.getenv("DB_DRIVER", "{ODBC Driver 17 for SQL Server}")
     DB_SCHEMA: str = os.getenv("DB_SCHEMA", "dbo")
     DB_TABLE_MODELS_HISTORY: str = os.getenv("DB_TABLE_MODELS_HISTORY", "models_history")
-    DB_TABLE_RAW_APPOINTMENTS: str = os.getenv("DB_TABLE_RAW_APPOINTMENTS", "raw_appointments")
-    DB_TABLE_TRAINING_DATA: str = os.getenv("DB_TABLE_TRAINING_DATA", "appointment_training_data")
+
+    # Parquet-based data on Blob Storage
+    BLOB_RAW_APPOINTMENTS_FOLDER: str = os.getenv("BLOB_RAW_APPOINTMENTS_FOLDER", "training-data/raw_appointments")
+    BLOB_TRAINING_DATA_FOLDER: str = os.getenv("BLOB_TRAINING_DATA_FOLDER", "training-data/appointment_training_data")
     
     # Training Configuration
     # Limit rows loaded for training (None = load all). Use this for very large datasets (900k+)
