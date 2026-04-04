@@ -63,8 +63,8 @@ class BlobStorageService:
             logger.error("Blob Storage is not configured. Cannot upload model.")
             return None
         
-        if environment not in ["development","homolog", "prod"]:
-            logger.error(f"Invalid environment: {environment}. Must be 'development', 'homolog' or 'prod'.")
+        if environment not in ["develop", "homolog", "prod"]:
+            logger.error(f"Invalid environment: {environment}. Must be 'develop', 'homolog' or 'prod'.")
             return None
         
         try:
@@ -219,7 +219,7 @@ class BlobStorageService:
             logger.error("Blob Storage is not configured. Cannot upload models.")
             return None
 
-        if environment not in ["development", "homolog", "prod"]:
+        if environment not in ["develop", "homolog", "prod"]:
             logger.error(f"Invalid environment: {environment}")
             return None
 
