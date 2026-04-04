@@ -47,7 +47,7 @@ def load_feedback_as_features(db: Session, config_dict: Dict[str, Any]) -> pd.Da
     """
     table = f"{config.DB_SCHEMA}.{config.DB_TABLE_APPOINTMENTS}"
 
-    stmt = text(f"""
+    stmt = text(f"""  # nosec B608 — table/schema names come from env vars, not user input; values are parameterized
         SELECT
             appointment_prediction_id  AS appointment_id,
             patient_id,
