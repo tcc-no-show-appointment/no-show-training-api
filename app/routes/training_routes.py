@@ -1,5 +1,7 @@
 import os
 import shutil
+import pandas as pd
+from datetime import datetime
 from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from sqlalchemy.orm import Session
@@ -10,11 +12,11 @@ from app.models.schemas import TrainingResponse, ValidationResponse
 from app.services import (
     DataValidator,
     engineer_features,
-    DataPersistenceService,
     ModelTrainer,
     ModelHistorySaver,
     BlobStorageService
 )
+from app.services.appointment_feedback_service import load_feedback_as_features
 from app.utils.logger import setup_logger
 from app.utils.helpers import (
     generate_unique_filename,
@@ -172,61 +174,58 @@ async def upload_and_train(
                 detail=f"Config validation error: {str(e)}"
             )
         
-        # Step 4: Save raw data to database and capture IDs
-        logger.info("Persisting raw data to raw_appointments table")
-        persistence = DataPersistenceService(db)
+        # Step 4: Generate batch ID and save raw data as Parquet to Blob Storage
+        batch_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        df["batch_id"] = batch_id
+
+        logger.info(f"Persisting raw data as Parquet to Blob Storage (batch={batch_id})")
         try:
-            captured_ids = persistence.save_raw_appointments(df)
-            logger.info(f"Captured {len(captured_ids)} raw_appointment_id values")
-            
-            # Add the captured IDs to the DataFrame before feature engineering
-            df["raw_appointment_id"] = captured_ids
-            logger.info(f"Added raw_appointment_id column to DataFrame")
-            
-            # Commit the session to ensure raw data is persisted
-            db.commit()
-            logger.info("Raw data transaction committed")
+            blob_service.upload_raw_parquet(
+                df=df,
+                environment=config.ENVIRONMENT,
+                batch_label=batch_id,
+            )
+            logger.info(f"Raw appointments parquet uploaded (batch={batch_id})")
         except Exception as e:
-            logger.error(f"Failed to persist raw appointments: {e}", exc_info=True)
-            db.rollback()
+            logger.error(f"Failed to upload raw appointments parquet: {e}", exc_info=True)
             raise HTTPException(
                 status_code=500,
-                detail=f"Failed to save raw data to database: {str(e)}"
+                detail=f"Failed to save raw data to blob storage: {str(e)}"
             )
 
-        # Step 5: Feature engineering (will preserve raw_appointment_id column)
-        logger.info(f"Before build_features - DataFrame shape: {df.shape}, columns: {list(df.columns)}")
-        logger.info(f"Raw appointment IDs present: {df['raw_appointment_id'].head().tolist()}")
-        
+        # raw_appointment_id as integer after upload — int64 is delta-encoded in Parquet (near-zero cost)
+        df["raw_appointment_id"] = range(len(df))
+
+        # Step 5: Feature engineering (raw_appointment_id and batch_id are preserved)
+        logger.info(f"Before build_features - DataFrame shape: {df.shape}")
+
         features = engineer_features(df, config_dict)
-        
-        logger.info(f"After build_features - DataFrame shape: {features.shape}, columns: {list(features.columns)}")
-        if "raw_appointment_id" in features.columns:
-            logger.info(f"[SUCCESS] raw_appointment_id preserved! Sample: {features['raw_appointment_id'].head().tolist()}")
-        else:
-            logger.warning("[WARNING] raw_appointment_id was NOT preserved by build_features")
 
-        # Step 6: Save training data to database with ID linkage
-        logger.info("Persisting training data to appointment_training_data table")
+        logger.info(f"After build_features - DataFrame shape: {features.shape}")
+
+        # Step 6: Save training data as Parquet to Blob Storage
+        logger.info("Persisting training data as Parquet to Azure Blob Storage")
         try:
-            persistence.save_training_data(features, source="raw")
-            db.commit()
-            logger.info("Training data transaction committed")
+            blob_service.upload_training_parquet(
+                df=features,
+                environment=config.ENVIRONMENT,
+                batch_label=batch_id,
+            )
+            logger.info("Training data parquet uploaded successfully")
         except Exception as e:
-            logger.error(f"Failed to persist training data: {e}", exc_info=True)
-            db.rollback()
+            logger.error(f"Failed to upload training parquet: {e}", exc_info=True)
             raise HTTPException(
                 status_code=500,
-                detail=f"Failed to save training data to database: {str(e)}"
+                detail=f"Failed to save training data to blob storage: {str(e)}"
             )
 
-        # Step 7: Load ALL training data (historical + new) for model training
-        logger.info("Loading all training data from database for model training")
+        # Step 7: Load ALL training data (historical + new) from Parquet files
+        logger.info("Loading all training data from Parquet files for model training")
         try:
-            # Use config to control data loading for large datasets
-            all_training_data = persistence.load_all_training_data(
-                limit=config.TRAINING_DATA_LIMIT,  # None = all data, or set limit (e.g., 500000)
-                days_lookback=config.TRAINING_DAYS_LOOKBACK  # None = all history, or days (e.g., 730)
+            all_training_data = blob_service.load_all_training_parquets(
+                environment=config.ENVIRONMENT,
+                limit=config.TRAINING_DATA_LIMIT,
+                days_lookback=config.TRAINING_DAYS_LOOKBACK,
             )
             logger.info(f"Loaded {len(all_training_data)} total rows for training (historical + new)")
             
@@ -235,10 +234,35 @@ async def upload_and_train(
             if config.TRAINING_DAYS_LOOKBACK:
                 logger.info(f"Training data limited to last {config.TRAINING_DAYS_LOOKBACK} days")
         except Exception as e:
-            logger.error(f"Failed to load training data: {e}", exc_info=True)
+            logger.error(f"Failed to load training parquets: {e}", exc_info=True)
             raise HTTPException(
                 status_code=500,
-                detail=f"Failed to load training data from database: {str(e)}"
+                detail=f"Failed to load training data from blob storage: {str(e)}"
+            )
+
+        # Step 7B: Enrich with feedback from dbo.appointment_predictions (ephemeral).
+        # Records with a confirmed outcome (Realizado/Falta) are queried from the DB,
+        # run through feature engineering in-memory, and concatenated with the Parquet
+        # dataset. They are intentionally NOT uploaded to Blob Storage — the DB is always
+        # queried fresh at training time, so there is no accumulation of duplicates.
+        logger.info("Enriching training dataset with feedback from appointment_predictions")
+        try:
+            feedback_features = load_feedback_as_features(db=db, config_dict=config_dict)
+            if not feedback_features.empty:
+                parquet_rows = len(all_training_data)
+                all_training_data = pd.concat(
+                    [all_training_data, feedback_features], ignore_index=True
+                )
+                logger.info(
+                    f"Dataset enriched: {parquet_rows} Parquet rows + "
+                    f"{len(feedback_features)} feedback rows = {len(all_training_data)} total"
+                )
+            else:
+                logger.info("No feedback records available — training on Parquet data only")
+        except Exception as e:
+            logger.warning(
+                f"Feedback enrichment failed: {e}. Proceeding without it.",
+                exc_info=True,
             )
 
         # Step 8: Validate combined dataset size for training

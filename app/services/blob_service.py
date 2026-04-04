@@ -1,10 +1,12 @@
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from datetime import datetime
+from io import BytesIO
 import json
 import yaml
+import pandas as pd
 from azure.storage.blob import BlobServiceClient, BlobClient
-from azure.core.exceptions import AzureError
+from azure.core.exceptions import AzureError, ResourceNotFoundError
 
 from app.config import config
 from app.utils.logger import setup_logger
@@ -61,8 +63,8 @@ class BlobStorageService:
             logger.error("Blob Storage is not configured. Cannot upload model.")
             return None
         
-        if environment not in ["development","homolog", "prod"]:
-            logger.error(f"Invalid environment: {environment}. Must be 'development', 'homolog' or 'prod'.")
+        if environment not in ["develop", "homolog", "prod"]:
+            logger.error(f"Invalid environment: {environment}. Must be 'develop', 'homolog' or 'prod'.")
             return None
         
         try:
@@ -217,7 +219,7 @@ class BlobStorageService:
             logger.error("Blob Storage is not configured. Cannot upload models.")
             return None
 
-        if environment not in ["development", "homolog", "prod"]:
+        if environment not in ["develop", "homolog", "prod"]:
             logger.error(f"Invalid environment: {environment}")
             return None
 
@@ -289,3 +291,125 @@ class BlobStorageService:
             container=self.container_name, blob=blob_name
         )
         blob_client.upload_blob(data, overwrite=overwrite)
+
+    # ------------------------------------------------------------------ #
+    # Parquet raw appointments on Blob Storage
+    # ------------------------------------------------------------------ #
+
+    def upload_raw_parquet(
+        self,
+        df: pd.DataFrame,
+        environment: str,
+        batch_label: str,
+    ) -> str:
+        if not self.is_configured():
+            raise RuntimeError("Blob Storage is not configured. Cannot upload parquet.")
+
+        blob_name = (
+            f"{environment}/{config.BLOB_RAW_APPOINTMENTS_FOLDER}/"
+            f"batch_{batch_label}.parquet"
+        )
+
+        buffer = BytesIO()
+        df.to_parquet(buffer, index=False, engine="pyarrow", compression="snappy")
+        buffer.seek(0)
+
+        blob_client = self.blob_service_client.get_blob_client(
+            container=self.container_name, blob=blob_name
+        )
+        blob_client.upload_blob(buffer, overwrite=False)
+
+        logger.info(
+            f"Uploaded raw appointments parquet ({len(df)} rows, "
+            f"{buffer.getbuffer().nbytes / 1024:.1f} KB) -> {blob_name}"
+        )
+        return blob_name
+
+    # ------------------------------------------------------------------ #
+    # Parquet training data on Blob Storage
+    # ------------------------------------------------------------------ #
+
+    def upload_training_parquet(
+        self,
+        df: pd.DataFrame,
+        environment: str,
+        batch_label: str,
+    ) -> str:
+        if not self.is_configured():
+            raise RuntimeError("Blob Storage is not configured. Cannot upload parquet.")
+
+        blob_name = (
+            f"{environment}/{config.BLOB_TRAINING_DATA_FOLDER}/"
+            f"batch_{batch_label}.parquet"
+        )
+
+        buffer = BytesIO()
+        df.to_parquet(buffer, index=False, engine="pyarrow", compression="snappy")
+        buffer.seek(0)
+
+        blob_client = self.blob_service_client.get_blob_client(
+            container=self.container_name, blob=blob_name
+        )
+        blob_client.upload_blob(buffer, overwrite=False)
+
+        logger.info(
+            f"Uploaded training parquet ({len(df)} rows, "
+            f"{buffer.getbuffer().nbytes / 1024:.1f} KB) -> {blob_name}"
+        )
+        return blob_name
+
+    def load_all_training_parquets(
+        self,
+        environment: str,
+        days_lookback: Optional[int] = None,
+        limit: Optional[int] = None,
+    ) -> pd.DataFrame:
+        if not self.is_configured():
+            raise RuntimeError("Blob Storage is not configured. Cannot load parquets.")
+
+        prefix = f"{environment}/{config.BLOB_TRAINING_DATA_FOLDER}/"
+        container_client = self.blob_service_client.get_container_client(
+            self.container_name
+        )
+
+        blob_names: List[str] = []
+        for blob in container_client.list_blobs(name_starts_with=prefix):
+            if blob.name.endswith(".parquet"):
+                blob_names.append(blob.name)
+
+        if not blob_names:
+            logger.warning(f"No parquet files found under {prefix}")
+            return pd.DataFrame()
+
+        blob_names.sort()
+        logger.info(f"Found {len(blob_names)} parquet file(s) under {prefix}")
+
+        frames: List[pd.DataFrame] = []
+        for name in blob_names:
+            blob_client = self.blob_service_client.get_blob_client(
+                container=self.container_name, blob=name
+            )
+            stream = blob_client.download_blob()
+            buf = BytesIO(stream.readall())
+            chunk = pd.read_parquet(buf, engine="pyarrow")
+            frames.append(chunk)
+            logger.debug(f"Read {len(chunk)} rows from {name}")
+
+        df = pd.concat(frames, ignore_index=True)
+        logger.info(f"Loaded {len(df)} total rows from {len(blob_names)} parquet file(s)")
+
+        if days_lookback and "appointment_at" in df.columns:
+            cutoff = pd.Timestamp.now() - pd.Timedelta(days=days_lookback)
+            df = df[df["appointment_at"] >= cutoff]
+            logger.info(
+                f"Filtered to {len(df)} rows (last {days_lookback} days)"
+            )
+
+        if "appointment_at" in df.columns:
+            df = df.sort_values("appointment_at", ascending=False)
+
+        if limit and len(df) > limit:
+            df = df.head(limit)
+            logger.info(f"Limited to {limit} most recent rows")
+
+        return df.reset_index(drop=True)

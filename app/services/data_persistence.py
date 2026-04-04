@@ -1,17 +1,17 @@
 """
-Service for persisting training pipeline data to the database.
+Service for persisting raw appointment data to the database.
 
-Handles two responsibilities:
-1. Save raw CSV data to raw_appointments (staging).
-2. Save engineered features to appointment_training_data (feature store).
+Handles saving raw CSV data to raw_appointments (staging).
+Engineered features (appointment_training_data) are now stored as
+Parquet files on Azure Blob Storage — see BlobStorageService.
 
 Uses SQL Server's OUTPUT clause to capture auto-generated IDs without
 additional SELECT queries, maintaining traceability via row indexes.
 """
 
 import pandas as pd
-from typing import List, Optional, Dict
-from datetime import datetime, timedelta
+from typing import List
+from datetime import datetime
 from sqlalchemy.orm import Session
 
 from app.config import config
@@ -41,91 +41,11 @@ RAW_CSV_TO_DB_MAP = {
     "Especialidade": "specialty",
 }
 
-# Feature-engineered DataFrame column → appointment_training_data DB column
-# All names match 1:1 except unit_cep → unit_zipcode
-FEATURES_TO_TRAINING_MAP = {
-    # Context columns
-    "patient_id": "patient_id",
-    "appointment_status": "appointment_status",
-    "scheduled_at": "scheduled_at",
-    "appointment_at": "appointment_at",
-    "patient_age": "patient_age",
-    "patient_sex": "patient_sex",
-    "patient_city": "patient_city",
-    "patient_neighborhood": "patient_neighborhood",
-    "insurance_type": "insurance_type",
-    "unit_name": "unit_name",
-    "unit_address": "unit_address",
-    "unit_cep": "unit_zipcode",
-    "specialty": "specialty",
-    "specialty_group": "specialty_group",
-    # Target
-    "no_show": "no_show",
-    # Engineered features
-    "waiting_days": "waiting_days",
-    "is_same_day": "is_same_day",
-    "age_group": "age_group",
-    "appointment_weekday": "appointment_weekday",
-    "appointment_day_of_month": "appointment_day_of_month",
-    "appointment_week_of_month": "appointment_week_of_month",
-    "hour_appointment": "hour_appointment",
-    "time_of_day": "time_of_day",
-    "is_weekend": "is_weekend",
-    "is_holiday": "is_holiday",
-    "is_month_start": "is_month_start",
-    "is_month_end": "is_month_end",
-    "is_pre_holiday": "is_pre_holiday",
-    "is_post_holiday": "is_post_holiday",
-    "is_bridge_day": "is_bridge_day",
-    "is_holiday_window": "is_holiday_window",
-    "month_sin": "month_sin",
-    "month_cos": "month_cos",
-    "weekday_sin": "weekday_sin",
-    "weekday_cos": "weekday_cos",
-    "hour_sin": "hour_sin",
-    "hour_cos": "hour_cos",
-    # Patient history features
-    "has_patient_history": "has_patient_history",
-    "previous_appointments_count": "previous_appointments_count",
-    "patient_tenure_days": "patient_tenure_days",
-    "past_no_shows": "past_no_shows",
-    "previous_no_show": "previous_no_show",
-    "consecutive_no_shows_2": "consecutive_no_shows_2",
-    "past_cancellations_count": "past_cancellations_count",
-    "cancellation_rate": "cancellation_rate",
-    "no_show_rate_patient": "no_show_rate_patient",
-    "no_show_rate_patient_smoothed": "no_show_rate_patient_smoothed",
-    "no_show_rate_recent_3": "no_show_rate_recent_3",
-    "no_show_rate_recent_5": "no_show_rate_recent_5",
-    "days_since_last_visit": "days_since_last_visit",
-    "days_since_last_no_show": "days_since_last_no_show",
-    "appointments_in_same_schedule_day": "appointments_in_same_schedule_day",
-    # Behavioral / interaction features
-    "is_diff_specialty": "is_diff_specialty",
-    "waiting_days_delta": "waiting_days_delta",
-    "age_x_waiting_days": "age_x_waiting_days",
-    "no_show_rate_x_waiting_days": "no_show_rate_x_waiting_days",
-    "age_x_specialty_risk": "age_x_specialty_risk",
-    "gender_age_profile": "gender_age_profile",
-    # Contextual rate features
-    "unit_no_show_rate": "unit_no_show_rate",
-    "specialty_no_show_rate": "specialty_no_show_rate",
-    "specialty_group_no_show_rate": "specialty_group_no_show_rate",
-    "insurance_no_show_rate": "insurance_no_show_rate",
-    "neighborhood_risk_score": "neighborhood_risk_score",
-    "specialty_high_no_show_flag": "specialty_high_no_show_flag",
-    # Geo features
-    "same_city": "same_city",
-    "is_local_resident": "is_local_resident",
-    "same_cep_prefix5": "same_cep_prefix5",
-}
-
 
 class DataPersistenceService:
     """
-    Persists pipeline data to the database without interrupting the
-    in-memory flow.  Every public method returns the *original* DataFrame
-    so callers can keep chaining.
+    Persists raw appointment data to the database.
+    Training feature data is stored as Parquet on Blob Storage.
     """
 
     def __init__(self, db: Session):
@@ -180,140 +100,6 @@ class DataPersistenceService:
                 f"Failed to save raw appointments to {full_table}: {e}",
                 exc_info=True,
             )
-            raise
-
-    def save_training_data(
-        self,
-        features_df: pd.DataFrame,
-        source: str = "raw",
-    ) -> pd.DataFrame:
-        """
-        Persist engineered features into appointment_training_data table.
-
-        Args:
-            features_df: DataFrame produced by ``engineer_features()``.
-                        If raw_appointment_id column is present, it will be
-                        used to populate the FK to raw_appointments table.
-            source: Traceability hint — ``"raw"`` for CSV-sourced data,
-                    ``"prediction"`` for data coming from labeled predictions.
-
-        Returns:
-            The same ``features_df`` — unchanged — so the pipeline can
-            continue from memory.
-        """
-        table_name = config.DB_TABLE_TRAINING_DATA
-        full_table = f"{self._schema}.{table_name}"
-
-        logger.info(
-            f"Persisting {len(features_df)} engineered rows to {full_table} "
-            f"(source={source})"
-        )
-
-        try:
-            db_df = self._map_columns(features_df, FEATURES_TO_TRAINING_MAP)
-            
-            # Use raw_appointment_id directly if it was preserved through feature engineering
-            if "raw_appointment_id" in features_df.columns:
-                db_df["raw_appointment_id"] = features_df["raw_appointment_id"]
-                valid_count = db_df["raw_appointment_id"].notna().sum()
-                logger.info(f"Using raw_appointment_id from DataFrame ({valid_count}/{len(db_df)} rows with valid IDs)")
-            else:
-                db_df["raw_appointment_id"] = None
-                logger.warning("raw_appointment_id column not found in features - FK will be NULL")
-            
-            # Add created_at timestamp (required NOT NULL column in database)
-            db_df["created_at"] = datetime.now()
-            
-            self._bulk_insert(db_df, table_name)
-            logger.info(f"Successfully saved {len(db_df)} rows to {full_table}")
-            
-        except Exception as e:
-            logger.error(
-                f"Failed to save training data to {full_table}: {e}",
-                exc_info=True,
-            )
-            raise
-
-        return features_df
-
-    def load_all_training_data(
-        self,
-        limit: Optional[int] = None,
-        days_lookback: Optional[int] = None
-    ) -> pd.DataFrame:
-        """
-        Load all training data from appointment_training_data table for model training.
-
-        Args:
-            limit: Optional maximum number of rows to fetch (most recent first).
-                   Use this to limit memory usage for very large tables.
-            days_lookback: Optional number of days to look back from today.
-                          E.g., 730 for last 2 years of data.
-
-        Returns:
-            DataFrame with all training features, columns mapped back to
-            feature names expected by the model (not DB column names).
-
-        Note:
-            For large datasets (900k+ rows), this uses chunked reading to
-            avoid memory overflow. Data is sorted by appointment_at DESC
-            to get most recent data first if using limit.
-        """
-        table_name = config.DB_TABLE_TRAINING_DATA
-        full_table = f"{self._schema}.{table_name}"
-
-        logger.info(f"Loading training data from {full_table}")
-        
-        # Build query with proper SQL Server syntax
-        select_clause = "SELECT"
-        if limit:
-            select_clause += f" TOP {limit}"
-            logger.info(f"Limiting to {limit} most recent rows")
-        
-        query = f"{select_clause} * FROM {full_table}"
-        
-        # Add date filter if specified
-        if days_lookback:
-            cutoff_date = datetime.now() - timedelta(days=days_lookback)
-            query += f" WHERE appointment_at >= '{cutoff_date.strftime('%Y-%m-%d')}'"
-            logger.info(f"Filtering data from last {days_lookback} days (since {cutoff_date.date()})")
-        
-        # Add ordering (most recent first)
-        query += " ORDER BY appointment_at DESC"
-        
-        try:
-            # Use pandas read_sql with chunking for memory efficiency
-            engine = self.db.get_bind()
-            
-            # For very large datasets, read in chunks and concatenate
-            if limit is None or limit > 100000:
-                logger.info("Large dataset detected - using chunked reading")
-                chunks = []
-                chunksize = 50000  # Read 50k rows at a time
-                
-                for chunk in pd.read_sql(query, engine, chunksize=chunksize):
-                    chunks.append(chunk)
-                    logger.debug(f"Loaded chunk: {len(chunk)} rows")
-                
-                df = pd.concat(chunks, ignore_index=True)
-            else:
-                df = pd.read_sql(query, engine)
-            
-            logger.info(f"Loaded {len(df)} rows from {full_table}")
-            
-            # Map DB columns back to feature names (reverse mapping)
-            reverse_map = {v: k for k, v in FEATURES_TO_TRAINING_MAP.items()}
-            
-            # Only rename columns that exist in the DataFrame
-            columns_to_rename = {db_col: feat_col for db_col, feat_col in reverse_map.items() if db_col in df.columns}
-            df = df.rename(columns=columns_to_rename)
-            
-            logger.info(f"Mapped {len(columns_to_rename)} columns back to feature names")
-            
-            return df
-            
-        except Exception as e:
-            logger.error(f"Failed to load training data from {full_table}: {e}", exc_info=True)
             raise
 
     # ------------------------------------------------------------------
@@ -429,34 +215,3 @@ class DataPersistenceService:
             )
 
         return all_ids
-
-    def _bulk_insert(self, df: pd.DataFrame, table_name: str) -> None:
-        """
-        Efficiently bulk-insert *df* using ``pandas.to_sql`` on the
-        underlying engine connection, respecting the configured schema.
-
-        ODBC Driver 17 for SQL Server limits each statement to 2,100
-        parameters when using multi-row INSERT VALUES.  We dynamically
-        calculate a safe chunksize with a small buffer:
-        ``columns × chunksize < 2,100``.
-        """
-        _ODBC_MAX_PARAMS = 2100
-        num_cols = len(df.columns)
-        # Use 2099 to stay strictly under the 2100 limit
-        safe_chunksize = max(1, (_ODBC_MAX_PARAMS - 1) // num_cols)
-
-        logger.debug(
-            f"Bulk insert into {self._schema}.{table_name}: "
-            f"{len(df)} rows, {num_cols} cols, chunksize={safe_chunksize}"
-        )
-
-        engine = self.db.get_bind()
-        df.to_sql(
-            name=table_name,
-            con=engine,
-            schema=self._schema,
-            if_exists="append",
-            index=False,
-            method="multi",
-            chunksize=safe_chunksize,
-        )
