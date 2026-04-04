@@ -32,6 +32,7 @@ class Config:
     DB_DRIVER: str = os.getenv("DB_DRIVER", "{ODBC Driver 17 for SQL Server}")
     DB_SCHEMA: str = os.getenv("DB_SCHEMA", "dbo")
     DB_TABLE_MODELS_HISTORY: str = os.getenv("DB_TABLE_MODELS_HISTORY", "models_history")
+    DB_TABLE_APPOINTMENTS: str = os.getenv("DB_TABLE_APPOINTMENTS", "appointment_predictions")
 
     # Parquet-based data on Blob Storage
     BLOB_RAW_APPOINTMENTS_FOLDER: str = os.getenv("BLOB_RAW_APPOINTMENTS_FOLDER", "training-data/raw_appointments")

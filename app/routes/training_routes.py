@@ -1,5 +1,6 @@
 import os
 import shutil
+import pandas as pd
 from datetime import datetime
 from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
@@ -15,6 +16,7 @@ from app.services import (
     ModelHistorySaver,
     BlobStorageService
 )
+from app.services.appointment_feedback_service import load_feedback_as_features
 from app.utils.logger import setup_logger
 from app.utils.helpers import (
     generate_unique_filename,
@@ -236,6 +238,31 @@ async def upload_and_train(
             raise HTTPException(
                 status_code=500,
                 detail=f"Failed to load training data from blob storage: {str(e)}"
+            )
+
+        # Step 7B: Enrich with feedback from dbo.appointment_predictions (ephemeral).
+        # Records with a confirmed outcome (Realizado/Falta) are queried from the DB,
+        # run through feature engineering in-memory, and concatenated with the Parquet
+        # dataset. They are intentionally NOT uploaded to Blob Storage — the DB is always
+        # queried fresh at training time, so there is no accumulation of duplicates.
+        logger.info("Enriching training dataset with feedback from appointment_predictions")
+        try:
+            feedback_features = load_feedback_as_features(db=db, config_dict=config_dict)
+            if not feedback_features.empty:
+                parquet_rows = len(all_training_data)
+                all_training_data = pd.concat(
+                    [all_training_data, feedback_features], ignore_index=True
+                )
+                logger.info(
+                    f"Dataset enriched: {parquet_rows} Parquet rows + "
+                    f"{len(feedback_features)} feedback rows = {len(all_training_data)} total"
+                )
+            else:
+                logger.info("No feedback records available — training on Parquet data only")
+        except Exception as e:
+            logger.warning(
+                f"Feedback enrichment failed: {e}. Proceeding without it.",
+                exc_info=True,
             )
 
         # Step 8: Validate combined dataset size for training
