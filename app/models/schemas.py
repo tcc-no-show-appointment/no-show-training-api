@@ -59,3 +59,24 @@ class ModelResponse(BaseModel):
     
     class Config:
         from_attributes = True
+
+
+class TrainingJobAccepted(BaseModel):
+    job_id: str = Field(..., description="Unique identifier for the training job")
+    status: str = Field(default="pending", description="Job status")
+    message: str = Field(default="Training job accepted and queued", description="Informational message")
+    status_url: str = Field(..., description="URL to poll for job status")
+    timestamp: datetime = Field(default_factory=datetime.now, description="Acceptance timestamp")
+
+
+class TrainingJobStatus(BaseModel):
+    job_id: str = Field(..., description="Unique identifier for the training job")
+    status: str = Field(..., description="Job status: pending / running / success / failed")
+    result: Optional[Dict[str, Any]] = Field(None, description="Training result (populated when status=success)")
+    error: Optional[str] = Field(None, description="Error message (populated when status=failed)")
+    created_at: datetime = Field(..., description="When the job was created")
+    started_at: Optional[datetime] = Field(None, description="When training actually started")
+    finished_at: Optional[datetime] = Field(None, description="When training finished")
+
+    class Config:
+        from_attributes = True
