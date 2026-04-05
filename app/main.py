@@ -14,7 +14,8 @@ app = FastAPI(
     title=config.API_TITLE,
     version=config.API_VERSION,
     description=config.API_DESCRIPTION,
-    redirect_slashes=False
+    redirect_slashes=False,
+    root_path=config.ROOT_PATH
 )
 
 # Configure CORS

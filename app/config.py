@@ -19,6 +19,8 @@ class Config:
     
     UPLOAD_TEMP_DIR: str = os.getenv("UPLOAD_TEMP_DIR", "temp_uploads")
     
+    ROOT_PATH: str = os.getenv("ROOT_PATH", "")
+    
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     LOG_FILE: str = os.getenv("LOG_FILE", "app.log")
 
