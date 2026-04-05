@@ -27,7 +27,7 @@ from app.utils.helpers import (
 )
 
 logger = setup_logger(__name__)
-router = APIRouter(prefix="/training", tags=["Training"])
+router = APIRouter(tags=["Training"])
 
 
 @router.post("/validate", response_model=ValidationResponse)
