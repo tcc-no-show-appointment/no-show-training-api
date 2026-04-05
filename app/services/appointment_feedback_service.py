@@ -47,7 +47,7 @@ def load_feedback_as_features(db: Session, config_dict: Dict[str, Any]) -> pd.Da
     """
     table = f"{config.DB_SCHEMA}.{config.DB_TABLE_APPOINTMENTS}"
 
-    stmt = text(f"""  # nosec B608 — table/schema names come from env vars, not user input; values are parameterized
+    stmt = text(f"""
         SELECT
             appointment_prediction_id  AS appointment_id,
             patient_id,
@@ -67,7 +67,7 @@ def load_feedback_as_features(db: Session, config_dict: Dict[str, Any]) -> pd.Da
         WHERE appointment_status IN (:status1, :status2)
           AND scheduled_at   IS NOT NULL
           AND appointment_at IS NOT NULL
-    """)
+    """)  # nosec B608 — table/schema names come from env vars, not user input; values are parameterized
 
     try:
         engine = db.get_bind()
