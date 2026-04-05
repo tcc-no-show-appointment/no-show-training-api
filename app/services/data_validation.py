@@ -5,13 +5,20 @@ from typing import Dict, Any, List, Optional
 from app.constants import REQUIRED_COLUMNS, SUPPORTED_FORMATS
 from app.utils.logger import setup_logger
 from app.utils.helpers import detect_file_format, get_file_size_mb
+from noshow_lib.data_handler import load_and_validate as lib_validate
 
 logger = setup_logger(__name__)
 
 
 class DataValidator:
-    def __init__(self):
-        self.required_columns = REQUIRED_COLUMNS
+    def __init__(self, required_columns: Optional[List[str]] = None):
+        """Initialize DataValidator.
+        
+        Args:
+            required_columns: Optional list of required column names from config.
+                            If None, uses default from constants.
+        """
+        self.required_columns = required_columns if required_columns is not None else REQUIRED_COLUMNS
         self.supported_formats = SUPPORTED_FORMATS
     
     def validate_file(self, file_path: str) -> Dict[str, Any]:
@@ -26,30 +33,26 @@ class DataValidator:
             "warnings": []
         }
         
-        # Check if file exists
         if not Path(file_path).exists():
             validation_result["errors"].append("File does not exist")
             logger.error(f"Validation failed: File does not exist - {file_path}")
             return validation_result
         
-        # Get file size
+        file_format = detect_file_format(file_path)
+        if file_format is None:
+            validation_result["errors"].append(
+                f"Unsupported file format. Supported formats: {list(self.supported_formats.keys())}"
+            )
+            logger.error(f"Validation failed: Unsupported file extension - {file_path}")
+            return validation_result
+        
+        validation_result["file_format"] = file_format
+        
         try:
             validation_result["file_size_mb"] = get_file_size_mb(file_path)
         except Exception as e:
             validation_result["warnings"].append(f"Could not determine file size: {str(e)}")
         
-        # Detect file format
-        file_format = detect_file_format(file_path)
-        validation_result["file_format"] = file_format
-        
-        if file_format is None:
-            validation_result["errors"].append(
-                f"Unsupported file format. Supported formats: {list(self.supported_formats.keys())}"
-            )
-            logger.error(f"Validation failed: Unsupported file format - {file_path}")
-            return validation_result
-        
-        # Try to load the file
         try:
             df = self._load_file(file_path, file_format)
             logger.info(f"Successfully loaded file. Shape: {df.shape}")
@@ -58,21 +61,21 @@ class DataValidator:
             logger.error(f"Validation failed: Could not load file - {str(e)}")
             return validation_result
         
-        # Check dataframe
         validation_result["rows"] = len(df)
         validation_result["columns"] = len(df.columns)
         
-        # Validate schema
-        schema_validation = self._validate_schema(df)
-        validation_result["missing_columns"] = schema_validation["missing_columns"]
-        validation_result["errors"].extend(schema_validation["errors"])
-        validation_result["warnings"].extend(schema_validation["warnings"])
+        # Only validate schema if required columns are defined
+        if self.required_columns:
+            schema_validation = self._validate_schema(df)
+            validation_result["missing_columns"] = schema_validation["missing_columns"]
+            validation_result["errors"].extend(schema_validation["errors"])
+            validation_result["warnings"].extend(schema_validation["warnings"])
+        else:
+            logger.info("Skipping schema validation - no required columns specified")
         
-        # Additional data quality checks
         quality_checks = self._check_data_quality(df)
         validation_result["warnings"].extend(quality_checks["warnings"])
         
-        # Determine if valid
         validation_result["is_valid"] = len(validation_result["errors"]) == 0
         
         if validation_result["is_valid"]:
@@ -100,7 +103,6 @@ class DataValidator:
             "warnings": []
         }
         
-        # Check for missing required columns
         missing = [col for col in self.required_columns if col not in df.columns]
         
         if missing:
@@ -110,7 +112,6 @@ class DataValidator:
             )
             logger.error(f"Schema validation failed: Missing columns {missing}")
         
-        # Check for extra columns (warning only)
         extra = [col for col in df.columns if col not in self.required_columns]
         if extra:
             result["warnings"].append(
@@ -124,12 +125,10 @@ class DataValidator:
             "warnings": []
         }
         
-        # Check for empty dataframe
         if len(df) == 0:
             result["warnings"].append("Dataframe is empty")
             return result
         
-        # Check for missing values in critical columns
         critical_columns = ["No-show", "Age", "Gender"]
         for col in critical_columns:
             if col in df.columns:
@@ -140,7 +139,6 @@ class DataValidator:
                         f"Column '{col}' has {missing_count} missing values ({missing_pct:.2f}%)"
                     )
         
-        # Check target variable distribution (if present)
         if "No-show" in df.columns:
             try:
                 value_counts = df["No-show"].value_counts()
@@ -174,3 +172,30 @@ class DataValidator:
                 return validation_result, None
         
         return validation_result, None
+    
+    def validate_with_config(self, df: pd.DataFrame, config_dict: dict) -> pd.DataFrame:
+        """
+        Validate dataframe against config schema using noshow_lib.
+        
+        Args:
+            df: DataFrame to validate
+            config_dict: Configuration dictionary from config.yaml
+            
+        Returns:
+            pd.DataFrame: Validated dataframe
+            
+        Raises:
+            ValueError: If validation fails
+            Exception: For other validation errors
+        """
+        logger.info("Performing schema validation with noshow_lib")
+        try:
+            validated_df = lib_validate(df, config_dict)
+            logger.info("Schema validation passed with noshow_lib")
+            return validated_df
+        except ValueError as e:
+            logger.error(f"Schema validation failed: {str(e)}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error during config validation: {str(e)}")
+            raise

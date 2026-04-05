@@ -1,175 +1,104 @@
-import time
-import numpy as np
-from typing import Dict, Any, Tuple, Optional
-from collections import Counter
-
-from sklearn.model_selection import train_test_split, GridSearchCV, StratifiedKFold
-from sklearn.preprocessing import OneHotEncoder, StandardScaler, FunctionTransformer
-from sklearn.compose import ColumnTransformer
-from sklearn.metrics import average_precision_score
-from sklearn.ensemble import RandomForestClassifier
-
-try:
-    from category_encoders import TargetEncoder
-except ImportError:
-    raise RuntimeError("Missing 'category_encoders'. Install with: pip install category_encoders")
-
-from imblearn.pipeline import Pipeline as ImbPipeline
-
-from app.config import config
-from app.constants import (
-    NUMERICAL_FEATURES,
-    CATEGORICAL_LOW_CARDINALITY,
-    CATEGORICAL_HIGH_CARDINALITY,
-    BINARY_FEATURES
-)
+import pandas as pd
+import joblib
+import json
+import shutil
+import tempfile
+from io import BytesIO
+from typing import Dict, Any
 from app.utils.logger import setup_logger
+from noshow_lib import train_model
 
 logger = setup_logger(__name__)
 
 
 class ModelTrainer:
-    def __init__(
-        self,
-        test_size: float = None,
-        cv_splits: int = None,
-        random_state: int = None
-    ):
-        self.test_size = test_size or config.TEST_SIZE
-        self.cv_splits = cv_splits or config.CV_SPLITS
-        self.random_state = random_state or config.MODEL_RANDOM_STATE
-        
-        self.preprocessor = None
-        self.best_model = None
-        self.training_metrics = {}
-    
-    def _create_preprocessor(self) -> ColumnTransformer:
-        try:
-            ohe = OneHotEncoder(drop="first", handle_unknown="ignore", sparse_output=False)
-        except TypeError:
-            ohe = OneHotEncoder(drop="first", handle_unknown="ignore", sparse=False)
-        
-        preprocessor = ColumnTransformer(
-            transformers=[
-                ("num", StandardScaler(), NUMERICAL_FEATURES),
-                ("gender_waitbucket", ohe, CATEGORICAL_LOW_CARDINALITY),
-                ("neigh", TargetEncoder(), CATEGORICAL_HIGH_CARDINALITY),
-                ("bin", "passthrough", BINARY_FEATURES),
-            ],
-            remainder="drop",
-            verbose_feature_names_out=False
-        )
-        
-        logger.info("Preprocessor pipeline created")
-        return preprocessor
-    
-    def _to_float32(self, X):
-        return X.astype(np.float32)
+    """Service for model training using noshow_lib (per-specialty models)."""
     
     def train(
-        self,
-        X: Any,
-        y: Any,
-        n_estimators_range: Optional[Tuple[int, int]] = None,
-        max_depth_range: Optional[Tuple[Optional[int], Optional[int]]] = None,
-        min_samples_leaf_range: Optional[Tuple[int, int]] = None
-    ) -> Dict[str, Any]:
-        start_time = time.time()
-        logger.info(f"Starting model training. Data shape: {X.shape}")
-        
-        # Split data
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y,
-            test_size=self.test_size,
-            stratify=y,
-            random_state=self.random_state
-        )
-        
-        logger.info(f"Train set size: {len(X_train)}, Test set size: {len(X_test)}")
-        logger.info(f"Train target distribution: {Counter(y_train)}")
-        
-        # Create preprocessor
-        self.preprocessor = self._create_preprocessor()
-        
-        # Create pipeline with memory optimization
-        astype32 = FunctionTransformer(self._to_float32)
-        
-        pipeline = ImbPipeline(steps=[
-            ("preprocess", self.preprocessor),
-            ("astype32", astype32),
-            ("clf", RandomForestClassifier(
-                n_estimators=120,
-                max_depth=None,
-                min_samples_leaf=10,
-                max_features="sqrt",
-                class_weight="balanced_subsample",
-                n_jobs=1,
-                random_state=self.random_state
-            ))
-        ])
-        
-        # Define grid search parameters
-        param_grid = {
-            "clf__n_estimators": n_estimators_range or [100, 180],
-            "clf__max_depth": max_depth_range or [None, 12],
-            "clf__min_samples_leaf": min_samples_leaf_range or [10, 20],
-        }
-        
-        logger.info(f"Grid search parameters: {param_grid}")
-        
-        # Cross-validation strategy
-        cv = StratifiedKFold(
-            n_splits=self.cv_splits,
-            shuffle=True,
-            random_state=self.random_state
-        )
-        
-        # Grid search
-        grid_search = GridSearchCV(
-            pipeline,
-            param_grid,
-            scoring="average_precision",
-            cv=cv,
-            n_jobs=1,
-            verbose=0
-        )
-        
-        logger.info("Starting GridSearchCV...")
-        grid_search.fit(X_train, y_train)
-        
-        # Store best model
-        self.best_model = grid_search.best_estimator_
-        
-        # Evaluate on test set
-        y_pred = self.best_model.predict(X_test)
-        y_prob = self.best_model.predict_proba(X_test)[:, 1]
-        
-        pr_auc = average_precision_score(y_test, y_prob)
-        
-        # Calculate training time
-        training_time = time.time() - start_time
-        
-        # Store metrics
-        self.training_metrics = {
-            "best_params": grid_search.best_params_,
-            "pr_auc": pr_auc,
-            "best_cv_score": grid_search.best_score_,
-            "training_time_seconds": training_time,
-            "train_size": len(X_train),
-            "test_size": len(X_test),
-            "train_positive_rate": float(y_train.sum() / len(y_train)),
-            "test_positive_rate": float(y_test.sum() / len(y_test))
-        }
-        
-        logger.info(f"Training completed in {training_time:.2f} seconds")
-        logger.info(f"Best parameters: {grid_search.best_params_}")
-        logger.info(f"PR-AUC on test set: {pr_auc:.4f}")
-        
-        return {
-            "model": self.best_model,
-            "metrics": self.training_metrics,
-            "X_test": X_test,
-            "y_test": y_test,
-            "y_pred": y_pred,
-            "y_prob": y_prob
-        }
+        self, 
+        features: pd.DataFrame,
+        config: Dict[str, Any]
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Train one LightGBM model per specialty_group using noshow_lib.
+
+        noshow_lib always writes joblib/json artifacts to disk (artifact_dir in
+        config). We redirect that to a temp directory and clean it up after
+        serializing everything to bytes in memory.
+
+        Returns:
+            Dict keyed by specialty_group. Each value contains:
+            - model_bytes: serialized joblib bytes
+            - metrics_bytes: JSON-encoded metrics + threshold
+            - metrics: dict of metric values
+            - threshold: optimal threshold for this specialty
+            - artifacts: full result dict from noshow_lib
+        """
+        logger.info("Starting model training with noshow_lib (per-specialty)")
+
+        tmp_dir = tempfile.mkdtemp(prefix="noshow_train_")
+        # Override artifact_dir so noshow_lib writes to our temp folder
+        config = {**config}
+        config["model_specialty"] = {**config.get("model_specialty", {}), "artifact_dir": tmp_dir}
+
+        try:
+            results = train_model(df=features, config=config)
+            
+            training_output: Dict[str, Dict[str, Any]] = {}
+            
+            for specialty, result in results.items():
+                model = result.get("model")
+                metrics = result.get("metrics", {})
+                threshold = result.get("threshold", 0.5)
+                
+                if model is None:
+                    logger.warning(f"[{specialty}] Training returned no model, skipping")
+                    continue
+                
+                # Serialize model to bytes
+                buffer = BytesIO()
+                joblib.dump(model, buffer)
+                model_bytes = buffer.getvalue()
+                
+                # Serialize metrics + threshold to JSON bytes
+                metrics_data = {
+                    "metrics": metrics,
+                    "threshold": threshold,
+                    "best_params": result.get("best_params", {}),
+                    "features_used": result.get("features_used", []),
+                    "cat_features": result.get("cat_features", []),
+                }
+                metrics_bytes = json.dumps(
+                    metrics_data, indent=2, ensure_ascii=False
+                ).encode("utf-8")
+                
+                training_output[specialty] = {
+                    "model_bytes": model_bytes,
+                    "metrics_bytes": metrics_bytes,
+                    "metrics": metrics,
+                    "threshold": threshold,
+                    "artifacts": result,
+                }
+                
+                logger.info(
+                    f"[{specialty}] Model size: {len(model_bytes)} bytes | "
+                    f"PR-AUC: {metrics.get('pr_auc', 'N/A')} | Threshold: {threshold:.2f}"
+                )
+            
+            if not training_output:
+                raise ValueError("Training completed but no models were produced")
+            
+            logger.info(
+                f"Training completed for {len(training_output)} specialties: "
+                f"{list(training_output.keys())}"
+            )
+            return training_output
+            
+        except Exception as e:
+            logger.error(f"Training failed: {str(e)}", exc_info=True)
+            raise RuntimeError(f"Model training failed: {str(e)}") from e
+
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            logger.debug(f"Cleaned up temp artifact dir: {tmp_dir}")
+

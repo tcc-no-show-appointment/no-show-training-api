@@ -1,6 +1,4 @@
-"""
-Helper functions for file handling and other utilities.
-"""
+"""Helper functions for file handling and utilities."""
 import os
 import uuid
 from pathlib import Path
@@ -28,11 +26,6 @@ def generate_unique_filename(original_filename: str) -> str:
     base_name = Path(original_filename).stem
     
     return f"{base_name}_{timestamp}_{unique_id}{ext}"
-
-
-def generate_model_filename(base_name: str = "rf_grid_model") -> str:
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return f"{base_name}_{timestamp}.pkl"
 
 
 def ensure_directory_exists(directory: str) -> Path:
