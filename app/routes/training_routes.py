@@ -277,7 +277,9 @@ def _run_training_background(job_id: str, temp_file_path: str, original_filename
         # Step 7B: Enrich with feedback from appointment_predictions
         logger.info(f"[Job {job_id}] Enriching dataset with feedback")
         try:
-            feedback_features = load_feedback_as_features(db=db, config_dict=config_dict)
+            feedback_features = load_feedback_as_features(
+                db=db, config_dict=config_dict, history_df=df,
+            )
             if not feedback_features.empty:
                 parquet_rows = len(all_training_data)
                 all_training_data = pd.concat(

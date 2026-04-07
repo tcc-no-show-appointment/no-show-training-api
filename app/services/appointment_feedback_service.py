@@ -31,7 +31,11 @@ _COLUMN_RENAMES = {
 }
 
 
-def load_feedback_as_features(db: Session, config_dict: Dict[str, Any]) -> pd.DataFrame:
+def load_feedback_as_features(
+    db: Session,
+    config_dict: Dict[str, Any],
+    history_df: pd.DataFrame = None,
+) -> pd.DataFrame:
     """
     Query dbo.appointment_predictions for records with a confirmed outcome,
     run feature engineering in-memory, and return the resulting feature DataFrame.
@@ -39,6 +43,8 @@ def load_feedback_as_features(db: Session, config_dict: Dict[str, Any]) -> pd.Da
     Args:
         db:          Active SQLAlchemy session (same DB connection used by the training API).
         config_dict: noshow_lib configuration dict (from blob storage).
+        history_df:  Optional DataFrame with historical appointments to compute
+                     patient history features correctly for feedback records.
 
     Returns:
         DataFrame with engineered features ready to be concatenated with the
@@ -107,7 +113,7 @@ def load_feedback_as_features(db: Session, config_dict: Dict[str, Any]) -> pd.Da
     df = df.rename(columns=_COLUMN_RENAMES)
 
     try:
-        features = engineer_features(df, config_dict)
+        features = engineer_features(df, config_dict, history_df=history_df)
     except Exception as e:
         logger.error(
             f"Feature engineering failed on feedback records: {e}", exc_info=True
