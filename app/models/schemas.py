@@ -43,7 +43,7 @@ class ModelResponse(BaseModel):
     model_name: str = Field(..., description="Name of the model")
     model_version: Optional[str] = Field(None, description="Model version identifier")
     blob_url: Optional[str] = Field(None, description="URL to model in blob storage")
-    environment: Optional[str] = Field(None, description="Environment (development/homolog/prod)")
+    environment: Optional[str] = Field(None, description="Environment (develop/homolog/prod)")
     specialty_group: Optional[str] = Field(None, description="Specialty group this model was trained for")
     accuracy: Optional[float] = Field(None, description="Model accuracy")
     precision: Optional[float] = Field(None, description="Model precision")

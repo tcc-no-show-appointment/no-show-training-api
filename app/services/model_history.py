@@ -47,7 +47,7 @@ class ModelHistorySaver:
                 model_name=model_name,
                 model_version=model_version,
                 blob_url=blob_url,
-                environment=environment or "development",
+                environment=environment or "develop",
                 specialty_group=specialty_group,
                 
                 # Metrics
