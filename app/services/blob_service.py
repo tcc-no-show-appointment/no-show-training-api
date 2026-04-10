@@ -413,3 +413,67 @@ class BlobStorageService:
             logger.info(f"Limited to {limit} most recent rows")
 
         return df.reset_index(drop=True)
+
+    # ------------------------------------------------------------------ #
+    # Precomputed stats upload
+    # ------------------------------------------------------------------ #
+
+    def upload_stats_parquets(
+        self,
+        patient_stats_df: pd.DataFrame,
+        contextual_stats_df: pd.DataFrame,
+        environment: str,
+    ) -> dict:
+        """
+        Upload precomputed stats parquets to blob storage.
+
+        Path structure:
+            {environment}/stats/patient_stats_{timestamp}.parquet   (versioned)
+            {environment}/stats/patient_stats_latest.parquet         (latest)
+            {environment}/stats/contextual_stats_{timestamp}.parquet (versioned)
+            {environment}/stats/contextual_stats_latest.parquet      (latest)
+
+        Args:
+            patient_stats_df: Output of precompute_patient_stats().
+            contextual_stats_df: Output of precompute_contextual_stats().
+            environment: Target environment folder.
+
+        Returns:
+            Dict with upload details.
+        """
+        if not self.is_configured():
+            raise RuntimeError("Blob Storage is not configured. Cannot upload stats.")
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        results = {}
+
+        for name, df in [
+            ("patient_stats", patient_stats_df),
+            ("contextual_stats", contextual_stats_df),
+        ]:
+            if df is None or df.empty:
+                logger.warning(f"Skipping {name} upload — DataFrame is empty.")
+                continue
+
+            versioned_name = f"{environment}/stats/{name}_{timestamp}.parquet"
+            latest_name = f"{environment}/stats/{name}_latest.parquet"
+
+            buffer = BytesIO()
+            df.to_parquet(buffer, index=False, engine="pyarrow", compression="snappy")
+            parquet_bytes = buffer.getvalue()
+
+            self._upload_blob_bytes(parquet_bytes, versioned_name, overwrite=False)
+            self._upload_blob_bytes(parquet_bytes, latest_name, overwrite=True)
+
+            results[name] = {
+                "versioned_name": versioned_name,
+                "latest_name": latest_name,
+                "rows": len(df),
+                "size_kb": round(len(parquet_bytes) / 1024, 1),
+            }
+            logger.info(
+                f"Uploaded {name}: {len(df)} rows, "
+                f"{len(parquet_bytes) / 1024:.1f} KB -> {latest_name}"
+            )
+
+        return results

@@ -13,6 +13,6 @@ pytest
 pytest-asyncio
 httpx
 pyyaml
-git+https://github.com/tcc-no-show-appointment/noshow_lib.git@v0.3.2
+git+https://github.com/tcc-no-show-appointment/noshow_lib.git@v0.3.7
 sqlalchemy
 pyodbc
