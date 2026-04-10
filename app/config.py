@@ -15,7 +15,7 @@ class Config:
     API_VERSION: str = "1.0.0"
     API_DESCRIPTION: str = "API for training no-show appointment prediction models"
     
-    ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development")
+    ENVIRONMENT: str = os.getenv("ENVIRONMENT", "develop")
     
     UPLOAD_TEMP_DIR: str = os.getenv("UPLOAD_TEMP_DIR", "temp_uploads")
     

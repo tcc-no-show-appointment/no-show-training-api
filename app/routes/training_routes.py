@@ -13,7 +13,7 @@ from app.models.schemas import TrainingResponse, TrainingJobAccepted, TrainingJo
 from app.models.sql_models import TrainingJob
 from app.services import (
     DataValidator,
-    engineer_features,
+    engineer_features_duckdb,
     ModelTrainer,
     ModelHistorySaver,
     BlobStorageService
@@ -246,10 +246,20 @@ def _run_training_background(job_id: str, temp_file_path: str, original_filename
 
         df["raw_appointment_id"] = range(len(df))
 
-        # Step 5: Feature engineering
-        logger.info(f"[Job {job_id}] Before build_features - Shape: {df.shape}")
-        features = engineer_features(df, config_dict)
-        logger.info(f"[Job {job_id}] After build_features - Shape: {features.shape}")
+        # Step 5: Feature engineering via DuckDB pipeline (Parquet → Parquet)
+        temp_raw_parquet = os.path.join(config.UPLOAD_TEMP_DIR, f"{batch_id}_raw.parquet")
+        temp_features_parquet = os.path.join(config.UPLOAD_TEMP_DIR, f"{batch_id}_features.parquet")
+
+        logger.info(f"[Job {job_id}] Saving raw data to temp parquet for DuckDB: {temp_raw_parquet}")
+        df.to_parquet(temp_raw_parquet, index=False, engine="pyarrow")
+
+        logger.info(f"[Job {job_id}] Running DuckDB feature engineering...")
+        features = engineer_features_duckdb(
+            input_parquet=temp_raw_parquet,
+            config=config_dict,
+            output_parquet=temp_features_parquet,
+        )
+        logger.info(f"[Job {job_id}] DuckDB feature engineering complete. Shape: {features.shape}")
 
         # Step 6: Save training data as Parquet
         logger.info(f"[Job {job_id}] Persisting training data as Parquet")
@@ -277,7 +287,9 @@ def _run_training_background(job_id: str, temp_file_path: str, original_filename
         # Step 7B: Enrich with feedback from appointment_predictions
         logger.info(f"[Job {job_id}] Enriching dataset with feedback")
         try:
-            feedback_features = load_feedback_as_features(db=db, config_dict=config_dict)
+            feedback_features = load_feedback_as_features(
+                db=db, config_dict=config_dict, history_df=df,
+            )
             if not feedback_features.empty:
                 parquet_rows = len(all_training_data)
                 all_training_data = pd.concat(
@@ -337,6 +349,43 @@ def _run_training_background(job_id: str, temp_file_path: str, original_filename
             upload_results = blob_service.upload_specialty_models(
                 training_output=training_output,
                 environment=config.ENVIRONMENT,
+            )
+
+        # Step 10B: Generate and upload precomputed stats for inference
+        logger.info(f"[Job {job_id}] Generating precomputed stats for inference...")
+        try:
+            from noshow_lib.stats_precompute import precompute_patient_stats, precompute_contextual_stats
+
+            # cutoff = most recent appointment date in training data + 1 day
+            if "appointment_at" in all_training_data.columns:
+                max_date = pd.to_datetime(all_training_data["appointment_at"]).max()
+                stats_cutoff = (max_date + pd.Timedelta(days=1)).date()
+            else:
+                from datetime import date as _date
+                stats_cutoff = _date.today()
+
+            patient_stats_df = precompute_patient_stats(all_training_data, stats_cutoff)
+            contextual_stats_df = precompute_contextual_stats(all_training_data, stats_cutoff)
+
+            logger.info(
+                f"[Job {job_id}] Stats generated: "
+                f"{len(patient_stats_df)} patients, "
+                f"{len(contextual_stats_df)} contextual rows (cutoff={stats_cutoff})"
+            )
+
+            if blob_service.is_configured():
+                stats_upload = blob_service.upload_stats_parquets(
+                    patient_stats_df=patient_stats_df,
+                    contextual_stats_df=contextual_stats_df,
+                    environment=config.ENVIRONMENT,
+                )
+                logger.info(f"[Job {job_id}] Stats uploaded: {stats_upload}")
+            else:
+                logger.warning(f"[Job {job_id}] Blob Storage not configured — skipping stats upload")
+        except Exception as e:
+            logger.warning(
+                f"[Job {job_id}] Stats precomputation failed: {e}. "
+                f"Inference will proceed without precomputed stats (degraded accuracy)."
             )
 
         # Step 11: Save model history
@@ -401,3 +450,10 @@ def _run_training_background(job_id: str, temp_file_path: str, original_filename
         db.close()
         if os.path.exists(temp_file_path):
             cleanup_temp_file(temp_file_path)
+        # Cleanup DuckDB temp parquets
+        for _tmp in [
+            os.path.join(config.UPLOAD_TEMP_DIR, f"{batch_id}_raw.parquet") if 'batch_id' in dir() else None,
+            os.path.join(config.UPLOAD_TEMP_DIR, f"{batch_id}_features.parquet") if 'batch_id' in dir() else None,
+        ]:
+            if _tmp and os.path.exists(_tmp):
+                cleanup_temp_file(_tmp)
