@@ -56,7 +56,7 @@ class BlobStorageService:
     def upload_model_with_versioning(
         self,
         data: bytes,
-        environment: str = "homolog",
+        environment: str = "develop",
         base_name: str = "model"
     ) -> Optional[dict]:
         if not self.is_configured():
@@ -193,7 +193,7 @@ class BlobStorageService:
     def upload_specialty_models(
         self,
         training_output: Dict[str, Dict[str, Any]],
-        environment: str = "homolog",
+        environment: str = "develop",
     ) -> Optional[Dict[str, Any]]:
         """
         Upload per-specialty model joblibs and consolidated thresholds to blob storage.
@@ -328,6 +328,24 @@ class BlobStorageService:
     # ------------------------------------------------------------------ #
     # Parquet training data on Blob Storage
     # ------------------------------------------------------------------ #
+
+    def count_training_blobs(self, environment: str) -> int:
+        """Return the number of training Parquet files in Blob Storage for *environment*.
+
+        Does **not** download any data — only lists blob names.  Returns 0 when
+        Blob Storage is not configured or when no files are found.
+        """
+        if not self.is_configured():
+            return 0
+        prefix = f"{environment}/{config.BLOB_TRAINING_DATA_FOLDER}/"
+        container_client = self.blob_service_client.get_container_client(
+            self.container_name
+        )
+        return sum(
+            1
+            for b in container_client.list_blobs(name_starts_with=prefix)
+            if b.name.endswith(".parquet")
+        )
 
     def upload_training_parquet(
         self,
