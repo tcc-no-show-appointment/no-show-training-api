@@ -191,9 +191,115 @@ async def get_training_status(job_id: str, db: Session = Depends(get_db)):
     )
 
 
-def _run_training_background(job_id: str, temp_file_path: str, original_filename: str) -> None:
-    """Background task that executes the full training pipeline and updates job status in DB."""
+@router.post("/retrain", response_model=TrainingJobAccepted, status_code=202)
+async def retrain_existing(
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+):
+    """Queue a model retraining job using only existing Blob data and prediction feedback.
+    No file upload required. Returns immediately with a job_id to poll for status."""
+    try:
+        # Guard: reject if a training job is already in progress
+        active_job = (
+            db.query(TrainingJob)
+            .filter(TrainingJob.status.in_(["pending", "running"]))
+            .first()
+        )
+        if active_job:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "A training job is already in progress. Wait for it to finish before starting a new one.",
+                    "active_job_id": active_job.job_id,
+                    "active_job_status": active_job.status,
+                    "status_url": f"/training/status/{active_job.job_id}",
+                },
+            )
+
+        # Pre-flight: verify there is actually data to train on before queuing
+        blob_service = BlobStorageService()
+        parquet_count = 0
+        feedback_count = 0
+
+        if blob_service.is_configured():
+            try:
+                parquet_count = blob_service.count_training_blobs(config.ENVIRONMENT)
+            except Exception as e:
+                logger.warning(f"Pre-flight blob check failed: {e}")
+
+        if parquet_count == 0:
+            # Fall back to checking feedback records in the DB.
+            # Mirror the same NULL filters that appointment_feedback_service applies so the
+            # count reflects records that will actually survive sanitisation.
+            try:
+                from sqlalchemy import text as _text
+                _table = f"{config.DB_SCHEMA}.{config.DB_TABLE_APPOINTMENTS}"
+                _stmt = _text(
+                    f"SELECT COUNT(*) FROM {_table} "  # nosec B608 — table/schema from env vars
+                    "WHERE appointment_status IN (:s1, :s2)"
+                    "  AND patient_id   IS NOT NULL"
+                    "  AND scheduled_at IS NOT NULL"
+                    "  AND appointment_at IS NOT NULL"
+                )
+                feedback_count = db.execute(
+                    _stmt, {"s1": "Realizado", "s2": "Falta"}
+                ).scalar() or 0
+            except Exception as e:
+                logger.warning(f"Pre-flight feedback check failed: {e}")
+
+        if parquet_count == 0 and feedback_count == 0:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "message": (
+                        "Nenhum dado de treinamento encontrado. "
+                        "O retreinamento só é possível após ao menos um treinamento completo com arquivo "
+                        "ou quando existem consultas com desfecho confirmado no banco de dados."
+                    ),
+                    "parquet_files": parquet_count,
+                    "feedback_records": feedback_count,
+                },
+            )
+
+        job_id = str(uuid.uuid4())
+        job = TrainingJob(
+            job_id=job_id,
+            status="pending",
+            original_filename=None,
+        )
+        db.add(job)
+        db.commit()
+
+        background_tasks.add_task(
+            _run_training_background,
+            job_id=job_id,
+            temp_file_path=None,
+            original_filename=None,
+        )
+
+        status_url = f"/training/status/{job_id}"
+        logger.info(
+            f"Retrain job {job_id} queued (no file). "
+            f"Blobs: {parquet_count}, Feedback: {feedback_count}. Poll: {status_url}"
+        )
+        return TrainingJobAccepted(job_id=job_id, status_url=status_url)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to queue retrain job: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to queue retrain job: {str(e)}")
+
+
+def _run_training_background(job_id: str, temp_file_path: str | None, original_filename: str | None) -> None:
+    """Background task that executes the full training pipeline and updates job status in DB.
+
+    When ``temp_file_path`` is ``None`` the file-upload steps (2–6) are skipped and the
+    pipeline starts directly at Step 7 (load all historical Blob data + feedback enrichment).
+    """
     db: Session = SessionLocal()
+    retrain_mode = temp_file_path is None
+    validation_result: dict = {}
     try:
         # Mark as running
         job = db.query(TrainingJob).filter(TrainingJob.job_id == job_id).first()
@@ -213,64 +319,71 @@ def _run_training_background(job_id: str, temp_file_path: str, original_filename
         except Exception as e:
             raise RuntimeError(f"Failed to download configuration: {str(e)}")
 
-        # Step 2: Basic validation
-        logger.info(f"[Job {job_id}] Starting data validation")
-        validator = DataValidator(required_columns=required_columns)
-        validation_result, df = validator.load_and_validate(temp_file_path)
-
-        if not validation_result["is_valid"]:
-            raise ValueError(
-                f"Data validation failed: {validation_result['errors']}"
+        if retrain_mode:
+            logger.info(
+                f"[Job {job_id}] Retrain mode: skipping file upload steps (2–6), "
+                "using existing Blob data + prediction feedback"
             )
-        logger.info(f"[Job {job_id}] Data validated. Shape: {df.shape}")
+            df = None
+        else:
+            # Step 2: Basic validation
+            logger.info(f"[Job {job_id}] Starting data validation")
+            validator = DataValidator(required_columns=required_columns)
+            validation_result, df = validator.load_and_validate(temp_file_path)
 
-        # Step 3: Validate with noshow_lib schema
-        try:
-            validator.validate_with_config(df, config_dict)
-        except ValueError as e:
-            raise ValueError(f"Schema validation failed: {str(e)}")
+            if not validation_result["is_valid"]:
+                raise ValueError(
+                    f"Data validation failed: {validation_result['errors']}"
+                )
+            logger.info(f"[Job {job_id}] Data validated. Shape: {df.shape}")
 
-        # Step 4: Generate batch ID and save raw data as Parquet to Blob Storage
-        batch_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-        df["batch_id"] = batch_id
+            # Step 3: Validate with noshow_lib schema
+            try:
+                validator.validate_with_config(df, config_dict)
+            except ValueError as e:
+                raise ValueError(f"Schema validation failed: {str(e)}")
 
-        logger.info(f"[Job {job_id}] Persisting raw data as Parquet (batch={batch_id})")
-        try:
-            blob_service.upload_raw_parquet(
-                df=df,
-                environment=config.ENVIRONMENT,
-                batch_label=batch_id,
+            # Step 4: Generate batch ID and save raw data as Parquet to Blob Storage
+            batch_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+            df["batch_id"] = batch_id
+
+            logger.info(f"[Job {job_id}] Persisting raw data as Parquet (batch={batch_id})")
+            try:
+                blob_service.upload_raw_parquet(
+                    df=df,
+                    environment=config.ENVIRONMENT,
+                    batch_label=batch_id,
+                )
+            except Exception as e:
+                raise RuntimeError(f"Failed to save raw data to blob storage: {str(e)}")
+
+            df["raw_appointment_id"] = range(len(df))
+
+            # Step 5: Feature engineering via DuckDB pipeline (Parquet → Parquet)
+            temp_raw_parquet = os.path.join(config.UPLOAD_TEMP_DIR, f"{batch_id}_raw.parquet")
+            temp_features_parquet = os.path.join(config.UPLOAD_TEMP_DIR, f"{batch_id}_features.parquet")
+
+            logger.info(f"[Job {job_id}] Saving raw data to temp parquet for DuckDB: {temp_raw_parquet}")
+            df.to_parquet(temp_raw_parquet, index=False, engine="pyarrow")
+
+            logger.info(f"[Job {job_id}] Running DuckDB feature engineering...")
+            features = engineer_features_duckdb(
+                input_parquet=temp_raw_parquet,
+                config=config_dict,
+                output_parquet=temp_features_parquet,
             )
-        except Exception as e:
-            raise RuntimeError(f"Failed to save raw data to blob storage: {str(e)}")
+            logger.info(f"[Job {job_id}] DuckDB feature engineering complete. Shape: {features.shape}")
 
-        df["raw_appointment_id"] = range(len(df))
-
-        # Step 5: Feature engineering via DuckDB pipeline (Parquet → Parquet)
-        temp_raw_parquet = os.path.join(config.UPLOAD_TEMP_DIR, f"{batch_id}_raw.parquet")
-        temp_features_parquet = os.path.join(config.UPLOAD_TEMP_DIR, f"{batch_id}_features.parquet")
-
-        logger.info(f"[Job {job_id}] Saving raw data to temp parquet for DuckDB: {temp_raw_parquet}")
-        df.to_parquet(temp_raw_parquet, index=False, engine="pyarrow")
-
-        logger.info(f"[Job {job_id}] Running DuckDB feature engineering...")
-        features = engineer_features_duckdb(
-            input_parquet=temp_raw_parquet,
-            config=config_dict,
-            output_parquet=temp_features_parquet,
-        )
-        logger.info(f"[Job {job_id}] DuckDB feature engineering complete. Shape: {features.shape}")
-
-        # Step 6: Save training data as Parquet
-        logger.info(f"[Job {job_id}] Persisting training data as Parquet")
-        try:
-            blob_service.upload_training_parquet(
-                df=features,
-                environment=config.ENVIRONMENT,
-                batch_label=batch_id,
-            )
-        except Exception as e:
-            raise RuntimeError(f"Failed to save training data to blob storage: {str(e)}")
+            # Step 6: Save training data as Parquet
+            logger.info(f"[Job {job_id}] Persisting training data as Parquet")
+            try:
+                blob_service.upload_training_parquet(
+                    df=features,
+                    environment=config.ENVIRONMENT,
+                    batch_label=batch_id,
+                )
+            except Exception as e:
+                raise RuntimeError(f"Failed to save training data to blob storage: {str(e)}")
 
         # Step 7: Load ALL training data (historical + new)
         logger.info(f"[Job {job_id}] Loading all training data from Parquet files")
@@ -288,7 +401,7 @@ def _run_training_background(job_id: str, temp_file_path: str, original_filename
         logger.info(f"[Job {job_id}] Enriching dataset with feedback")
         try:
             feedback_features = load_feedback_as_features(
-                db=db, config_dict=config_dict, history_df=df,
+                db=db, config_dict=config_dict, history_df=df if not retrain_mode else None,
             )
             if not feedback_features.empty:
                 parquet_rows = len(all_training_data)
@@ -303,6 +416,15 @@ def _run_training_background(job_id: str, temp_file_path: str, original_filename
                 logger.info(f"[Job {job_id}] No feedback records — training on Parquet data only")
         except Exception as e:
             logger.warning(f"[Job {job_id}] Feedback enrichment failed: {e}. Proceeding without it.")
+
+        # Guard: nothing to train on
+        if len(all_training_data) == 0:
+            raise ValueError(
+                "Nenhum dado de treinamento disponível. "
+                "No modo de retreinamento é necessário ter ao menos um treinamento anterior com arquivo "
+                "ou consultas com desfecho confirmado (Realizado/Falta) e campos obrigatórios preenchidos "
+                "(patient_id, scheduled_at, appointment_at)."
+            )
 
         # Step 8: Validate combined dataset size
         MIN_SAMPLES_TOTAL = 20
@@ -399,9 +521,9 @@ def _run_training_background(job_id: str, temp_file_path: str, original_filename
                 environment=config.ENVIRONMENT,
                 file_metadata={
                     "filename": original_filename,
-                    "rows": validation_result.get("rows"),
-                    "columns": validation_result.get("columns"),
-                    "file_size_mb": validation_result.get("file_size_mb"),
+                    "rows": validation_result.get("rows") if not retrain_mode else None,
+                    "columns": validation_result.get("columns") if not retrain_mode else None,
+                    "file_size_mb": validation_result.get("file_size_mb") if not retrain_mode else None,
                 },
             )
         except Exception as e:
@@ -448,7 +570,7 @@ def _run_training_background(job_id: str, temp_file_path: str, original_filename
             logger.error(f"[Job {job_id}] Failed to update job status in DB: {db_err}")
     finally:
         db.close()
-        if os.path.exists(temp_file_path):
+        if temp_file_path and os.path.exists(temp_file_path):
             cleanup_temp_file(temp_file_path)
         # Cleanup DuckDB temp parquets
         for _tmp in [
