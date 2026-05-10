@@ -79,7 +79,7 @@ async def validate_file_endpoint(
             try:
                 validator.validate_with_config(df, config_dict)
                 validation_result["warnings"] = validation_result.get("warnings", [])
-                validation_result["warnings"].append("Schema validation passed with config requirements")
+                validation_result["warnings"].append("Esquema validado com sucesso conforme os requisitos de configuração")
             except ValueError as e:
                 raise HTTPException(
                     status_code=400,
