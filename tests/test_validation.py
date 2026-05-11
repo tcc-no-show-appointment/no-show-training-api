@@ -57,8 +57,9 @@ class TestDataValidator:
             os.unlink(path)
 
     def test_nonexistent_file_fails(self):
+        path = os.path.join(tempfile.gettempdir(), 'nonexistent_file_abc123.csv')
         v = DataValidator()
-        result = v.validate_file('/tmp/nonexistent_file_abc123.csv')
+        result = v.validate_file(path)
         assert result['is_valid'] is False
         assert result['errors']
 
