@@ -4,7 +4,8 @@ import json
 import shutil
 import tempfile
 from io import BytesIO
-from typing import Dict, Any
+from pathlib import Path
+from typing import Dict, Any, Optional, Tuple
 from app.utils.logger import setup_logger
 from noshow_lib import train_model
 
@@ -18,7 +19,7 @@ class ModelTrainer:
         self, 
         features: pd.DataFrame,
         config: Dict[str, Any]
-    ) -> Dict[str, Dict[str, Any]]:
+    ) -> Tuple[Dict[str, Dict[str, Any]], Optional[bytes]]:
         """
         Train one LightGBM model per specialty_group using noshow_lib.
 
@@ -27,12 +28,15 @@ class ModelTrainer:
         serializing everything to bytes in memory.
 
         Returns:
-            Dict keyed by specialty_group. Each value contains:
-            - model_bytes: serialized joblib bytes
-            - metrics_bytes: JSON-encoded metrics + threshold
-            - metrics: dict of metric values
-            - threshold: optimal threshold for this specialty
-            - artifacts: full result dict from noshow_lib
+            Tuple of:
+            - Dict keyed by specialty_group, each value containing:
+              - model_bytes: serialized joblib bytes
+              - metrics_bytes: JSON-encoded metrics + threshold
+              - metrics: dict of metric values
+              - threshold: optimal threshold for this specialty
+              - artifacts: full result dict from noshow_lib
+            - Optional[bytes]: K-Means cluster artifact bytes
+              (kmeans_cluster_patient.joblib), or None if not produced
         """
         logger.info("Starting model training with noshow_lib (per-specialty)")
 
@@ -92,7 +96,22 @@ class ModelTrainer:
                 f"Training completed for {len(training_output)} specialties: "
                 f"{list(training_output.keys())}"
             )
-            return training_output
+
+            # Read K-Means cluster artifact produced by noshow_lib v0.4.0
+            cluster_artifact_bytes: Optional[bytes] = None
+            kmeans_path = Path(tmp_dir) / "kmeans_cluster_patient.joblib"
+            if kmeans_path.exists():
+                cluster_artifact_bytes = kmeans_path.read_bytes()
+                logger.info(
+                    f"K-Means artifact captured: {len(cluster_artifact_bytes)} bytes"
+                )
+            else:
+                logger.warning(
+                    "K-Means artifact not found after training — "
+                    "cluster_patient feature will be -1 at inference time."
+                )
+
+            return training_output, cluster_artifact_bytes
             
         except Exception as e:
             logger.error(f"Training failed: {str(e)}", exc_info=True)
