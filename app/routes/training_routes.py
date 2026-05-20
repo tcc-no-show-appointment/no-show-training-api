@@ -455,7 +455,7 @@ def _run_training_background(job_id: str, temp_file_path: str | None, original_f
             all_training_data = _create_specialty_group(all_training_data)
 
         trainer = ModelTrainer()
-        training_output = trainer.train(features=all_training_data, config=config_dict)
+        training_output, cluster_artifact_bytes = trainer.train(features=all_training_data, config=config_dict)
 
         all_metrics = {sp: data["metrics"] for sp, data in training_output.items()}
         all_thresholds = {sp: data["threshold"] for sp, data in training_output.items()}
@@ -471,6 +471,7 @@ def _run_training_background(job_id: str, temp_file_path: str | None, original_f
             upload_results = blob_service.upload_specialty_models(
                 training_output=training_output,
                 environment=config.ENVIRONMENT,
+                cluster_artifact_bytes=cluster_artifact_bytes,
             )
 
         # Step 10B: Generate and upload precomputed stats for inference

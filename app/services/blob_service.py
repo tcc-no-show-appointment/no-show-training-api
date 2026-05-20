@@ -194,15 +194,19 @@ class BlobStorageService:
         self,
         training_output: Dict[str, Dict[str, Any]],
         environment: str = "develop",
+        cluster_artifact_bytes: Optional[bytes] = None,
     ) -> Optional[Dict[str, Any]]:
         """
-        Upload per-specialty model joblibs and consolidated thresholds to blob storage.
+        Upload per-specialty model joblibs, consolidated thresholds, and
+        optional K-Means cluster artifact to blob storage.
 
         Path structure:
             {environment}/{specialty_lower}/model_{timestamp}.joblib   (versioned)
             {environment}/{specialty_lower}/model_latest.joblib        (latest)
             {environment}/thresholds/thresholds_{timestamp}.json       (versioned)
             {environment}/thresholds/thresholds_latest.json            (latest)
+            {environment}/artifacts/kmeans_cluster_patient_{timestamp}.joblib  (versioned)
+            {environment}/artifacts/kmeans_cluster_patient_latest.joblib       (latest)
 
         Metrics are NOT uploaded to blob storage — they are stored in the DB only.
         Only specialties present in training_output are uploaded; existing
@@ -211,9 +215,11 @@ class BlobStorageService:
         Args:
             training_output: Dict from ModelTrainer.train() keyed by specialty.
             environment: Target environment folder.
+            cluster_artifact_bytes: Raw bytes of kmeans_cluster_patient.joblib
+                produced by noshow_lib v0.4.0 train_model(). Pass None to skip.
 
         Returns:
-            Dict with upload details per specialty + thresholds, or None on failure.
+            Dict with upload details per specialty + thresholds + artifact, or None on failure.
         """
         if not self.is_configured():
             logger.error("Blob Storage is not configured. Cannot upload models.")
@@ -269,6 +275,25 @@ class BlobStorageService:
             self._upload_blob_bytes(thresholds_bytes, thresholds_latest, overwrite=True)
             upload_results["thresholds_versioned"] = thresholds_versioned
             upload_results["thresholds_latest"] = thresholds_latest
+
+            # K-Means cluster artifact (noshow_lib v0.4.0)
+            if cluster_artifact_bytes is not None:
+                artifact_versioned = (
+                    f"{environment}/artifacts/kmeans_cluster_patient_{timestamp}.joblib"
+                )
+                artifact_latest = (
+                    f"{environment}/artifacts/kmeans_cluster_patient_latest.joblib"
+                )
+                self._upload_blob_bytes(cluster_artifact_bytes, artifact_versioned, overwrite=False)
+                self._upload_blob_bytes(cluster_artifact_bytes, artifact_latest, overwrite=True)
+                upload_results["cluster_artifact_versioned"] = artifact_versioned
+                upload_results["cluster_artifact_latest"] = artifact_latest
+                logger.info(f"K-Means cluster artifact uploaded: {artifact_latest}")
+            else:
+                logger.warning(
+                    "No K-Means cluster artifact provided — skipping artifact upload. "
+                    "cluster_patient will be -1 at inference time."
+                )
 
             logger.info(
                 f"{len(training_output)} specialty model(s) uploaded to '{environment}'"
