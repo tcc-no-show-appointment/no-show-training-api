@@ -1,294 +1,181 @@
 # No-Show Training API
 
-A FastAPI application for training machine learning models to predict no-show appointments, integrated with the `noshow_lib` library.
+## Visão geral
 
-## Status
+API FastAPI responsável por orquestrar o pipeline completo de treinamento de modelos de predição de não comparecimento em consultas médicas. O diferencial desta API está na estratégia de modelos agrupados por especialidade médica: ao invés de um único modelo global, o `noshow_lib` treina um modelo LightGBM dedicado para cada grupo de especialidade com volume suficiente de dados, mais um modelo fallback para especialidades menos frequentes. Isso permite que cada modelo capture padrões específicos de absenteísmo por área médica.
 
-**Fully functional implementation** using the `noshow_lib` package for ML training pipeline.
+O treinamento é executado de forma assíncrona em background, combinando dados históricos persistidos no Blob Storage com novos dados enviados via upload, ou somente com dados existentes no caso do retraining. O histórico de jobs e métricas é persistido em banco de dados para rastreabilidade.
 
-## Features
+## Funcionalidades principais
 
-### Implemented
+- Validação de arquivos CSV, Excel e Parquet (`POST /validate`)
+- Upload e agendamento de treino assíncrono (`POST /upload-and-train`)
+- Retraining com dados existentes no Blob (`POST /retrain`)
+- Consulta de status do job por ID (`GET /status/{job_id}`)
+- Registro de histórico de modelos no banco de dados
+- Health check (`GET /`)
 
-- ✅ File validation (CSV, Excel, Parquet)
-- ✅ Azure Blob Storage integration
-- ✅ RESTful API endpoints
-- ✅ Comprehensive logging
-- ✅ Error handling
-- ✅ Data preprocessing via `noshow_lib`
-- ✅ Feature engineering via `noshow_lib`
-- ✅ Model training via `noshow_lib` (external access mode)
-- ✅ Metrics evaluation (ROC-AUC, F1, Recall, Precision, Accuracy)
-- ✅ Automatic model serialization to bytes for blob upload
+## Como funciona
 
-### TODO
+1. O arquivo é enviado e salvo temporariamente
+2. O schema é validado contra a configuração do Blob Storage
+3. Um job de treinamento é criado no banco com status `pending` e o `job_id` é retornado imediatamente
+4. O treinamento roda em background: pré-processamento → feature engineering → treino por especialidade → serialização
+5. Os modelos treinados são enviados ao Azure Blob Storage como arquivos `.joblib`
+6. As métricas e metadados são registrados no banco de dados
+7. O cliente consulta `GET /status/{job_id}` para acompanhar o progresso
 
-- ⏳ Model history persistence (database integration)
+## Endpoints principais
 
-## API Endpoints
+- `POST /validate` — valida o arquivo sem iniciar treinamento
+- `POST /upload-and-train` — inicia treino com novo arquivo, retorna `job_id` (HTTP 202)
+- `POST /retrain` — reagenda treinamento usando dados existentes no Blob e feedback de predições
+- `GET /status/{job_id}` — retorna status (`pending` / `running` / `success` / `failed`) e métricas ao final
+- `GET /` — verifica se a API está saudável
 
-### `POST /training/validate`
+## Métricas retornadas
 
-Validates an uploaded file without processing.
+Ao concluir, o job expõe métricas por especialidade:
 
-**Request:**
+- `roc_auc`, `pr_auc`
+- `f1_score`, `recall`, `precision`, `accuracy`
+- `threshold` — limiar calibrado pelo Optuna
+- `training_time_seconds`, `dataset_rows`
 
-- File upload (multipart/form-data)
-- Supported formats: CSV, Excel (.xlsx, .xls), Parquet
+A configuração do modelo (hiperparâmetros, features selecionadas, colunas obrigatórias) é totalmente gerenciada pelo `noshow_lib` via `config.yaml` interno.
 
-**Response:**
+## Requisitos de dados
 
-```json
-{
-  "is_valid": true,
-  "file_format": "csv",
-  "file_size_mb": 2.5,
-  "rows": 10000,
-  "columns": 14,
-  "missing_columns": [],
-  "errors": [],
-  "warnings": []
-}
-```
+O arquivo enviado deve conter colunas compatíveis com o schema de treinamento. Campos de referência:
 
-### `POST /training/upload-and-train`
+- `PatientId`, `AppointmentID`
+- `Gender`, `Age`, `Neighbourhood`
+- `ScheduledDay`, `AppointmentDay`
+- `Scholarship`, `Hipertension`, `Diabetes`, `Alcoholism`, `Handcap`
+- `SMS_received`, `No-show`
 
-Executes the complete training flow using the `noshow_lib` pipeline.
+A validação final usa o schema de colunas definido na configuração do Blob Storage.
 
-**Flow:**
+## Banco de dados
 
-1. Validate uploaded file
-2. Preprocess data using `noshow_lib.load_and_process_data()`
-3. Feature engineering using `noshow_lib.build_features()`
-4. Model training using `noshow_lib.train_model()` (external access mode)
-5. Automatic model serialization to joblib bytes
-6. Upload trained model to Azure Blob Storage
-7. Return metrics and blob URL
+As tabelas são criadas automaticamente na startup via `Base.metadata.create_all()` caso não existam no banco configurado (Azure SQL / SQL Server via pyodbc).
 
-**Request:**
+| Tabela          | Descrição                                                                         |
+| --------------- | --------------------------------------------------------------------------------- |
+| `TrainingJob`   | Rastreia cada job de treinamento com status, timestamps e resultado JSON          |
+| `ModelRegistry` | Histórico de modelos publicados com métricas, versão, especialidade e URL do Blob |
 
-- File upload (multipart/form-data)
+## Estrutura do projeto
 
-**Response:**
+- `app/main.py` — inicialização do FastAPI, roteadores e criação de tabelas
+- `app/routes/training_routes.py` — endpoints de validação, upload, status e retraining
+- `app/services/data_validation.py` — validação de formato e schema do arquivo
+- `app/services/data_preprocessing.py` — pré-processamento e feature engineering via noshow_lib
+- `app/services/training_service.py` — pipeline de treino e serialização dos modelos
+- `app/services/model_history.py` — persistência do histórico de modelos no banco
+- `app/services/blob_service.py` — upload/download no Azure Blob Storage
+- `app/models/schemas.py` — modelos Pydantic para requests e responses
+- `app/models/sql_models.py` — modelos SQLAlchemy (`TrainingJob`, `ModelRegistry`)
+- `app/database.py` — engine e sessão SQLAlchemy
+- `app/config.py` — variáveis de ambiente e configuração
+- `app/utils/` — logger e helpers genéricos
 
-```json
-{
-  "status": "success",
-  "message": "Training flow completed successfully",
-  "model_filename": "noshow_model_20250123_143022.joblib",
-  "blob_url": "https://storage.blob.core.windows.net/models/noshow_model_20250123_143022.joblib",
-  "metrics": {
-    "threshold_used": 0.3456,
-    "roc_auc": 0.8234,
-    "average_precision": 0.7891,
-    "f1": 0.6543,
-    "recall": 0.7123,
-    "precision": 0.6012,
-    "accuracy": 0.8456
-  },
-  "training_time_seconds": 45.3,
-  "timestamp": "2025-11-23T14:30:22.000000"
-}
-```
+## Tecnologias principais
 
-### `GET /`
+| Tecnologia                    | Por quê                                                                                                                                                            |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **FastAPI + BackgroundTasks** | Permite retornar o `job_id` imediatamente e executar o treino de forma assíncrona sem bloquear a API                                                               |
+| **noshow_lib**                | Encapsula todo o pipeline de ML — pré-processamento, feature engineering, treino por especialidade com Optuna e serialização — em uma única dependência versionada |
+| **LightGBM** (via noshow_lib) | Excelente desempenho em dados tabulares com alta cardinalidade e desbalanceamento de classes, comum em datasets de saúde                                           |
+| **Optuna** (via noshow_lib)   | Otimização automática de hiperparâmetros e threshold de classificação                                                                                              |
+| **SQLAlchemy + pyodbc**       | ORM com criação automática de tabelas e suporte a Azure SQL                                                                                                        |
+| **Azure Blob Storage**        | Armazenamento centralizado dos modelos publicados, acessível tanto pela Training API quanto pela Prediction API                                                    |
+| **pandas + pyarrow**          | Manipulação eficiente de grandes volumes de dados durante o pipeline de treino                                                                                     |
 
-Health check endpoint.
-
-### `GET /info`
-
-API information and available endpoints.
-
-## Required File Columns
-
-The uploaded CSV/Excel/Parquet file must contain the following columns:
-
-- `PatientId`
-- `AppointmentID`
-- `Gender`
-- `ScheduledDay`
-- `AppointmentDay`
-- `Age`
-- `Neighbourhood`
-- `Scholarship`
-- `Hipertension`
-- `Diabetes`
-- `Alcoholism`
-- `Handcap`
-- `SMS_received`
-- `No-show`
-
-## Installation
+## Uso local
 
 ```bash
-# Clone the repository
-git clone https://github.com/tcc-no-show-appointment/no-show-training-api.git
+git clone <repo>
 cd no-show-training-api
-
-# Install dependencies (including noshow_lib)
 pip install -r requirements.txt
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-## Dependencies
-
-This API uses the `noshow_lib` package for ML operations:
+## Testes
 
 ```bash
-# noshow_lib is automatically installed from requirements.txt
-# It provides:
-# - load_and_process_data: Data preprocessing
-# - build_features: Feature engineering
-# - train_model: Model training with external access mode
-```
-
-## Environment Variables
-
-```env
-# Azure Storage
-AZURE_STORAGE_ACCOUNT_NAME=your_storage_account
-AZURE_STORAGE_CONNECTION_STRING=your_connection_string
-AZURE_STORAGE_ACCOUNT_KEY=your_account_key
-AZURE_BLOB_CONTAINER_NAME=your_container
-
-# API Configuration
-MAX_FILE_SIZE_MB=100
-UPLOAD_TEMP_DIR=temp_uploads
-
-# Logging
-LOG_LEVEL=INFO
-LOG_FILE=app.log
-```
-
-## Running the API
-
-```bash
-# Development
-uvicorn app.main:app --reload
-
-# Production
-uvicorn app.main:app --host 0.0.0.0 --port 8000
-```
-
-## Project Structure
-
-```
-app/
-├── __init__.py
-├── main.py                 # FastAPI application
-├── config.py              # Configuration settings
-├── constants.py           # Constants and validation rules
-├── models/
-│   ├── __init__.py
-│   └── schemas.py         # Pydantic models
-├── routes/
-│   ├── __init__.py
-│   └── training_routes.py # Training endpoints
-├── services/
-│   ├── __init__.py
-│   ├── data_validation.py      # File validation
-│   ├── data_preprocessing.py   # Preprocessing (uses noshow_lib)
-│   ├── training_service.py     # Training (uses noshow_lib)
-│   ├── model_history.py        # History tracking (TODO)
-│   └── blob_service.py         # Azure Blob Storage
-└── utils/
-    ├── __init__.py
-    ├── logger.py          # Logging configuration
-    └── helpers.py         # Helper functions
-```
-
-## How It Works
-
-### Training Pipeline
-
-The API uses `noshow_lib` in **external access mode**, which means:
-
-1. **No file I/O** - All operations happen in memory
-2. **Auto-configuration** - Model parameters loaded from `noshow_lib/config.yaml`
-3. **Serialized output** - Returns model as joblib bytes ready for blob upload
-
-**Code Flow:**
-
-```python
-# 1. Preprocess data
-from noshow_lib import load_and_process_data
-processed_data = load_and_process_data(raw_dataframe)
-
-# 2. Engineer features
-from noshow_lib import build_features
-features = build_features(processed_data, {"target_column": "No-show"})
-
-# 3. Train model (external access mode)
-from noshow_lib import train_model
-model_bytes, metrics = train_model(
-    df_input=features,
-    is_external_access=True  # Returns bytes instead of saving to disk
-)
-
-# 4. Upload to blob
-blob_service.upload_bytes(model_bytes, blob_name="model.joblib")
-```
-
-### External Access Mode Benefits
-
-- ✅ **Memory-only operations** - Perfect for APIs and microservices
-- ✅ **No manual serialization** - Model already in joblib bytes format
-- ✅ **Direct blob upload** - No intermediate file storage needed
-- ✅ **Automatic config** - Uses `noshow_lib`'s configuration automatically
-
-## Testing
-
-```bash
-# Run tests
 pytest
-
-# Run with coverage
-pytest --cov=app tests/
 ```
+
+## CI/CD
+
+Pipeline executado via GitHub Actions em pushes para `develop`, `homolog` e `prod`:
+
+1. **Build** — instala dependências com Python 3.11
+2. **Lint** — análise estática com Flake8
+3. **Tests** — execução de testes com pytest
+4. **Security** — varredura de segurança com Bandit
+5. **Deploy** — publicação automática no Azure Container Apps (apenas `homolog` e `prod`)
 
 ## Docker
 
 ```bash
-# Build image
 docker build -t no-show-training-api .
-
-# Run container
 docker run -p 8000:8000 --env-file .env no-show-training-api
 ```
 
-## Next Steps
+## Diagrama de sequência
 
-To enhance the API:
+```mermaid
+sequenceDiagram
+    actor User as Usuário (Clínica)
+    participant FE as Frontend
+    participant Gateway as API Gateway
+    participant TrainAPI as Training API
+    participant ML as noshow_lib (Core ML)
+    participant Blob as Azure Blob Storage
 
-1. **Implement model history tracking**: Add database integration for version control
-2. **Add model versioning**: Track different model versions with metadata
-3. **Implement A/B testing**: Support for deploying multiple model versions
-4. **Add monitoring**: Track prediction performance over time
-5. **Enhance validation**: Add more sophisticated data quality checks
+    Note over User, Blob: Pipeline de Treinamento
+    User->>FE: Envia arquivo de dados (Upload)
+    FE->>Gateway: POST /upload-and-train
+    Gateway->>TrainAPI: Inicia pipeline de treino
+    activate TrainAPI
 
-## Model Configuration
+    TrainAPI->>TrainAPI: Valida schema do arquivo
+    TrainAPI->>Blob: Persiste dados brutos
 
-The ML model configuration is managed by `noshow_lib`. To customize:
+    %% Destacando a noshow_lib no Treino
+    TrainAPI->>ML: build_features() (Feature Engineering em lote)
+    activate ML
+    ML-->>TrainAPI: Dataset de features gerado
+    deactivate ML
 
-1. Clone the `noshow_lib` repository
-2. Edit `config.yaml` with your desired parameters:
-   - Model type (LGBMClassifier, RandomForest, etc.)
-   - Hyperparameters
-   - Feature engineering rules
-   - Class balancing settings (SMOTE)
-   - Evaluation metrics
+    TrainAPI->>Blob: Salva features em Parquet
+    TrainAPI->>Blob: Carrega histórico completo
+    Blob-->>TrainAPI: Dataset combinado
 
-## Metrics Returned
+    TrainAPI->>ML: train_model(dataset_combinado)
+    activate ML
+    ML->>ML: Divisão Temporal (Train/Val/Test)
+    ML->>ML: Optuna (Tuning de Hiperparâmetros)
+    ML->>ML: Treina LightGBM por especialidade
+    ML-->>TrainAPI: Retorna {Modelos, Métricas, Limiares}
+    deactivate ML
 
-The API returns comprehensive evaluation metrics:
+    %% Persistência
+    TrainAPI->>Blob: Upload novos modelos (.joblib)
+    TrainAPI->>TrainAPI: Registra histórico no DB
 
-- `roc_auc`: Area under the ROC curve
-- `average_precision`: Average precision score
-- `f1`: F1 score (harmonic mean of precision and recall)
-- `recall`: Recall (sensitivity)
-- `precision`: Precision
-- `accuracy`: Overall accuracy
-- `threshold_used`: Optimized decision threshold
+    deactivate TrainAPI
+    TrainAPI-->>Gateway: 200 OK (Métricas de Performance)
+    Gateway-->>FE: Exibe resultados (Accuracy, PR-AUC)
+    FE-->>User: Treinamento concluído
+```
 
-## License
+## Integração
+
+Este serviço é consumido pelo frontend `showUp` para iniciar novos treinamentos e consultar o histórico de modelos. Configure a URL via variável de ambiente `VITE_TRAINING_API_URL` no frontend.
+
+## Licença
 
 MIT
